@@ -1,0 +1,7 @@
+{
+  "name": "OGE Homework \\ telegram \\ emails",
+  "description": "Тот же самый ФИПИ, только удобнее",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
