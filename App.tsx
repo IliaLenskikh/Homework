@@ -48,12 +48,19 @@ interface TrackedStudent {
     pendingHomeworkCount?: number;
 }
 
+// Toast Notification Type
+interface ToastMsg {
+  id: number;
+  message: string;
+  type: 'success' | 'error' | 'info';
+}
+
 // Improved Error Handling
 const getErrorMessage = (error: any) => {
   if (typeof error === 'string') return error;
   if (error instanceof Error) return error.message;
   if (error && typeof error === 'object') {
-      // Try to find a message property in common API error formats
+      if (error.code === '42P01') return "Database Error: Table not found. Please run the SQL schema script.";
       if (error.message) return error.message;
       if (error.error_description) return error.error_description;
       return JSON.stringify(error);
@@ -91,14 +98,27 @@ function App() {
   const [studentHomework, setStudentHomework] = useState<HomeworkAssignment[]>([]);
   const [dashboardTab, setDashboardTab] = useState<'HISTORY' | 'HOMEWORK'>('HISTORY');
   
-  // Homework Modal (Legacy / Quick assign specific)
+  // Homework Modal
   const [isHomeworkModalOpen, setIsHomeworkModalOpen] = useState(false);
   const [studentToAssign, setStudentToAssign] = useState<TrackedStudent | null>(null);
   const [quickAssignTask, setQuickAssignTask] = useState<{title: string, type: ExerciseType} | undefined>(undefined);
 
+  // Toast State
+  const [toasts, setToasts] = useState<ToastMsg[]>([]);
+
   const totalTasks = grammarStories.length + vocabStories.length + allReadingStories.length + listeningStories.length + speakingStories.length + allOralStories.length + writingStories.length;
 
+  // Add Toast
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 5000);
+  };
+
   useEffect(() => {
+    // Initial check
     checkSession();
     
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event: AuthChangeEvent, session: Session | null) => {
@@ -110,9 +130,16 @@ function App() {
         }
       }
       
-      // Reload profile on sign in
+      // On SIGNED_IN, we might be already handling it in handleAuth, 
+      // but this acts as a backup for session restoration.
       if (event === 'SIGNED_IN' && session) {
-          await loadUserProfile(session.user.id, session.user.email!);
+          // Do not await here to avoid blocking UI if this triggers unexpectedly
+          loadUserProfile(session.user.id, session.user.email!).catch(console.error);
+      }
+      
+      if (event === 'SIGNED_OUT') {
+          setView(ViewState.REGISTRATION);
+          setUserProfile({ name: '', email: '', teacherEmail: '' });
       }
     });
 
@@ -123,24 +150,28 @@ function App() {
 
   // Realtime subscription for Students
   useEffect(() => {
+    let channel: any;
     if (userProfile.role === 'student' && userProfile.id) {
-        const channel = supabase
-            .channel('public:homework_assignments')
-            .on('postgres_changes', 
-                { event: '*', schema: 'public', table: 'homework_assignments', filter: `student_id=eq.${userProfile.id}` }, 
-                (payload) => {
-                    // console.log('Change received!', payload);
-                    loadHomework(userProfile.id!); // Refresh homework on any change
-                }
-            )
-            .subscribe();
-
-        return () => {
-            supabase.removeChannel(channel);
-        };
+        try {
+            channel = supabase
+                .channel('public:homework_assignments')
+                .on('postgres_changes', 
+                    { event: '*', schema: 'public', table: 'homework_assignments', filter: `student_id=eq.${userProfile.id}` }, 
+                    () => {
+                        loadHomework(userProfile.id!); 
+                    }
+                )
+                .subscribe();
+        } catch (e) {
+            console.error("Realtime subscription error:", e);
+        }
     }
+    return () => {
+        if (channel) supabase.removeChannel(channel);
+    };
   }, [userProfile.role, userProfile.id]);
 
+  // Load teacher's student list from local storage
   useEffect(() => {
       if (userProfile.role === 'teacher') {
           const saved = localStorage.getItem('tracked_students');
@@ -155,22 +186,14 @@ function App() {
       }
   }, [userProfile.role]);
   
-  // Refresh teacher dashboard view when re-entering it
-  useEffect(() => {
-      if (view === ViewState.TEACHER_DASHBOARD && selectedStudentForView) {
-          handleSelectStudentForView(selectedStudentForView);
-      }
-  }, [view]);
-
   const checkSession = async () => {
-    setLoading(true);
+    // Silent check, don't show global loading
     const { data: { session } } = await supabase.auth.getSession();
     if (session) {
       await loadUserProfile(session.user.id, session.user.email!);
     } else {
-      setView(ViewState.REGISTRATION);
+      // Stay on Registration view
     }
-    setLoading(false);
   };
 
   const loadUserProfile = async (userId: string, userEmail: string) => {
@@ -196,11 +219,13 @@ function App() {
         });
         setCompletedStories(new Set(data.completed_stories || []));
         
+        // Navigation Logic:
+        // If no role, go to selection. 
+        // If role exists, go to HOME (unless we are already in a deep view)
         if (!data.role) {
             setView(ViewState.ROLE_SELECTION);
         } else {
-            // Allow navigating to Home unless we are in a special view
-            if (view !== ViewState.SETTINGS && view !== ViewState.TEACHER_DASHBOARD) {
+            if ([ViewState.REGISTRATION, ViewState.FORGOT_PASSWORD, ViewState.ROLE_SELECTION].includes(view)) {
                 setView(ViewState.HOME);
             }
             if (data.role === 'student') {
@@ -208,25 +233,35 @@ function App() {
             }
         }
       } else {
-        // No profile found, force role selection to create one
+        // No profile found in DB, temporary profile state
         setUserProfile({ id: userId, name: '', email: userEmail, teacherEmail: '' });
         setView(ViewState.ROLE_SELECTION);
       }
     } catch (e) {
       console.error("Critical profile load error:", e);
-      // Fallback
+      // Fail-safe: allow user to retry or see role selection
       setView(ViewState.ROLE_SELECTION);
     }
   };
 
   const loadHomework = async (studentId: string) => {
-      const { data } = await supabase
-          .from('homework_assignments')
-          .select('*')
-          .eq('student_id', studentId);
-      
-      if (data) {
-          setMyHomework(data as HomeworkAssignment[]);
+      try {
+          const { data, error } = await supabase
+              .from('homework_assignments')
+              .select('*')
+              .eq('student_id', studentId);
+          
+          if (error) {
+              if (error.code === '42P01') {
+                  console.warn("Homework table missing. SQL setup required.");
+              }
+              return;
+          }
+          if (data) {
+              setMyHomework(data as HomeworkAssignment[]);
+          }
+      } catch (e) {
+          console.error("Homework load failed:", e);
       }
   };
 
@@ -236,57 +271,103 @@ function App() {
     
     setLoading(true);
     setAuthError(null);
+    
     try {
+      let result;
       if (isLoginMode) {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
-        
-        // Explicitly load profile to ensure view updates before loading stops
-        if (data.session) {
-            const email = data.session.user.email || '';
-            await loadUserProfile(data.session.user.id, email);
-        }
+        result = await supabase.auth.signInWithPassword({ email, password });
       } else {
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-        });
-        if (error) throw error;
-        if (data.user) {
-            const { error: profileError } = await supabase
-                .from('profiles')
-                .insert([{ id: data.user.id, full_name: fullName, email: email }]);
-            
-            if (profileError) console.error("Profile creation error:", profileError);
+        result = await supabase.auth.signUp({ email, password });
+      }
 
-            setAuthSuccessMsg("Registration successful! Please check your email to confirm your account, then sign in.");
-            setIsLoginMode(true);
-        }
+      if (result.error) throw result.error;
+
+      if (result.data.session) {
+          const session = result.data.session;
+          // Fail-safe: Use Promise.race to prevent hanging if DB is slow
+          try {
+              await Promise.race([
+                  loadUserProfile(session.user.id, session.user.email!),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error('Profile load timeout')), 8000))
+              ]);
+          } catch (timeoutErr) {
+              console.warn("Profile load timed out, proceeding to fallback.");
+              // Force entry if timeout happens
+              setView(ViewState.ROLE_SELECTION);
+              setUserProfile({ 
+                  id: session.user.id, 
+                  email: session.user.email!, 
+                  name: '', 
+                  teacherEmail: '' 
+              });
+          }
+      } else if (!isLoginMode && result.data.user && !result.data.session) {
+          setAuthSuccessMsg("Registration successful! Please check your email to confirm your account.");
+          setIsLoginMode(true);
       }
     } catch (error: any) {
       console.error("Auth Error:", error);
       setAuthError(getErrorMessage(error));
     } finally {
+      // Must ensure loading is turned off
       setLoading(false);
     }
   };
 
+  const handleAssignHomework = async (targetStudentId: string, exercises: { title: string; type: ExerciseType }[], dueDate: string, instructions: string) => {
+    if (!targetStudentId || !userProfile.id) {
+        showToast("Error: Missing student or teacher ID", "error");
+        return;
+    }
+    
+    setLoading(true);
+
+    try {
+      const assignments = exercises.map(ex => ({
+        teacher_id: userProfile.id,
+        student_id: targetStudentId,
+        exercise_title: ex.title,
+        exercise_type: ex.type,
+        due_date: new Date(dueDate).toISOString(),
+        status: 'pending',
+        instructions: instructions
+      }));
+
+      // Batch insert for efficiency ("EdTech standard")
+      const { error } = await supabase
+        .from('homework_assignments')
+        .insert(assignments);
+
+      if (error) throw error;
+
+      showToast(`Successfully assigned ${exercises.length} tasks!`, "success");
+      setIsHomeworkModalOpen(false); 
+      
+      // Refresh data in background
+      await fetchStudentHomework(targetStudentId);
+      refreshStudentStats(trackedStudents); 
+
+    } catch (err: any) {
+      console.error("Assign error:", err);
+      showToast(getErrorMessage(err), "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Other Helper Functions ... 
+  
   const handlePasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setAuthError(null);
     setAuthSuccessMsg(null);
-    
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: window.location.origin,
       });
-      
       if (error) throw error;
-      setAuthSuccessMsg("Password reset link has been sent to your email. Check your spam folder.");
+      setAuthSuccessMsg("Password reset link sent.");
     } catch (error: any) {
       setAuthError(getErrorMessage(error));
     } finally {
@@ -319,8 +400,6 @@ function App() {
       }
   };
 
-  // --- Homework & Student Tracking Logic (Teacher) ---
-
   const refreshStudentStats = async (students: TrackedStudent[]) => {
       const updatedList: TrackedStudent[] = [];
       for (const st of students) {
@@ -342,11 +421,16 @@ function App() {
           
           if (error || !profile) return null;
 
-          const { count } = await supabase
+          // Check if homework table exists before querying
+          const { count, error: countError } = await supabase
             .from('homework_assignments')
             .select('*', { count: 'exact', head: true })
             .eq('student_id', profile.id)
             .eq('status', 'pending');
+
+          if (countError && countError.code === '42P01') {
+              console.warn("Homework table missing");
+          }
 
           const completed = Array.isArray(profile.completed_stories) ? profile.completed_stories.length : 0;
           return {
@@ -358,7 +442,6 @@ function App() {
               pendingHomeworkCount: count || 0
           };
       } catch (e) {
-          console.error("Error fetching student:", e);
           return null;
       }
   };
@@ -369,12 +452,10 @@ function App() {
       if (!studentEmailInput) return;
 
       const emailToAdd = studentEmailInput.trim().toLowerCase();
-
       if (trackedStudents.find(s => s.email.toLowerCase() === emailToAdd)) {
-          setStudentAddError("Student already in your list.");
+          setStudentAddError("Student already in list.");
           return;
       }
-
       if (emailToAdd === userProfile.email?.toLowerCase()) {
           setStudentAddError("You cannot add yourself.");
           return;
@@ -389,12 +470,14 @@ function App() {
           setTrackedStudents(newList);
           localStorage.setItem('tracked_students', JSON.stringify(newList));
           setStudentEmailInput('');
+          showToast("Student added successfully", "success");
       } else {
-          setStudentAddError("Student not found or email not accessible.");
+          setStudentAddError("Student not found. Ask them to register first.");
       }
   };
 
   const handleRemoveStudent = (emailToRemove: string) => {
+      if(!confirm("Stop tracking this student?")) return;
       const newList = trackedStudents.filter(s => s.email !== emailToRemove);
       setTrackedStudents(newList);
       localStorage.setItem('tracked_students', JSON.stringify(newList));
@@ -402,31 +485,23 @@ function App() {
           setSelectedStudentForView(null);
           setStudentResults([]);
       }
+      showToast("Student removed", "info");
   };
 
   const handleSelectStudentForView = async (student: TrackedStudent) => {
       setSelectedStudentForView(student);
       setResultDetail(null);
-      // setDashboardTab('HISTORY'); // Keep tab if refreshing
-      // setLoading(true); // Don't block UI if refreshing in bg
-      
       try {
-          const { data: results, error: resError } = await supabase
+          const { data: results } = await supabase
             .from('student_results')
             .select('*')
             .eq('student_id', student.id)
             .order('created_at', { ascending: false });
           
-          if (!resError && results) {
-              setStudentResults(results as StudentResult[]);
-          }
-
+          if (results) setStudentResults(results as StudentResult[]);
           await fetchStudentHomework(student.id);
-
       } catch (err) {
-          console.error("Failed to load student data", err);
-      } finally {
-          // setLoading(false);
+          console.error(err);
       }
   };
 
@@ -438,10 +513,10 @@ function App() {
         .eq('student_id', studentId)
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
-      setStudentHomework(data as HomeworkAssignment[]);
+      if (error && error.code !== '42P01') throw error;
+      if (data) setStudentHomework(data as HomeworkAssignment[]);
     } catch (err) {
-      console.error("Error fetching student homework", err);
+      console.error(err);
     }
   };
 
@@ -451,109 +526,23 @@ function App() {
     setIsHomeworkModalOpen(true);
   };
 
-  // Instant Assign Function
   const assignTaskImmediately = async (storyTitle: string, exerciseType: ExerciseType) => {
       if (!selectedStudentForView) {
-          alert("Please select a student from the Dashboard first.");
+          showToast("Select a student first.", "error");
           return;
       }
-      if (!userProfile.id) return;
-
-      // Default due date: 7 days from now
-      const defaultDueDate = new Date();
-      defaultDueDate.setDate(defaultDueDate.getDate() + 7);
-
-      const { error } = await supabase
-        .from('homework_assignments')
-        .insert({
-            teacher_id: userProfile.id,
-            student_id: selectedStudentForView.id,
-            exercise_title: storyTitle,
-            exercise_type: exerciseType,
-            due_date: defaultDueDate.toISOString(),
-            status: 'pending',
-            instructions: 'Please complete this task.'
-        });
-
-      if (error) {
-          console.error("Assign error", error);
-          alert("Failed to assign: " + getErrorMessage(error));
-      } else {
-          // Refresh background data if needed, though immediate UI update happens in ExerciseCard
-          // We can refresh the student stats in background
-          refreshStudentStats(trackedStudents);
-      }
-  };
-
-  // Assign via Modal
-  const handleAssignHomework = async (studentId: string, exercises: { title: string; type: ExerciseType }[], dueDate: string, instructions: string) => {
-    const targetStudentId = studentId;
-    
-    if (!targetStudentId || !userProfile.id) return;
-    setLoading(true);
-
-    try {
-      const assignments = exercises.map(ex => ({
-        teacher_id: userProfile.id,
-        student_id: targetStudentId,
-        exercise_title: ex.title,
-        exercise_type: ex.type,
-        due_date: new Date(dueDate).toISOString(),
-        status: 'pending',
-        instructions: instructions
-      }));
-
-      const { error } = await supabase
-        .from('homework_assignments')
-        .insert(assignments);
-
-      if (error) throw error;
-
-      await fetchStudentHomework(targetStudentId);
-      refreshStudentStats(trackedStudents); 
+      // Re-use the main assignment function for consistency
+      const exercises = [{ title: storyTitle, type: exerciseType }];
+      // Default 7 days
+      const defaultDate = new Date();
+      defaultDate.setDate(defaultDate.getDate() + 7);
       
-      alert('Homework assigned successfully!');
-      setIsHomeworkModalOpen(false); 
-    } catch (err: any) {
-      alert('Failed to assign homework: ' + getErrorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // --- Student Logic ---
-
-  const checkForHomeworkCompletion = async (title: string, type: ExerciseType, score: number, maxScore: number) => {
-      const assignment = myHomework.find(h => 
-          h.exercise_title === title && 
-          h.exercise_type === type && 
-          h.status !== 'completed'
+      await handleAssignHomework(
+          selectedStudentForView.id,
+          exercises,
+          defaultDate.toISOString().split('T')[0], // YYYY-MM-DD
+          "Quick assigned task"
       );
-
-      if (assignment) {
-          try {
-              const { error } = await supabase
-                  .from('homework_assignments')
-                  .update({ 
-                      status: 'completed',
-                      completed_at: new Date().toISOString(),
-                      score: score,
-                      max_score: maxScore
-                  })
-                  .eq('id', assignment.id);
-              
-              if (!error) {
-                  // Local update
-                  setMyHomework(prev => prev.map(h => 
-                      h.id === assignment.id 
-                          ? { ...h, status: 'completed', score, maxScore, completed_at: new Date().toISOString() } 
-                          : h
-                  ));
-              }
-          } catch (e) {
-              console.error("Error updating homework status", e);
-          }
-      }
   };
 
   const handleSettingsSave = async (e: React.FormEvent) => {
@@ -562,7 +551,6 @@ function App() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        // 1. Update Profile Data
         const { error } = await supabase
           .from('profiles')
           .upsert({
@@ -574,59 +562,41 @@ function App() {
 
         if (error) throw error;
 
-        // 2. Update Password if provided
         if (newPassword) {
-            const { error: pwdError } = await supabase.auth.updateUser({
-                password: newPassword
-            });
+            const { error: pwdError } = await supabase.auth.updateUser({ password: newPassword });
             if (pwdError) throw pwdError;
-            setNewPassword(''); // Clear after success
-            alert('Settings and Password updated successfully!');
+            setNewPassword('');
+            showToast("Settings and Password updated!", "success");
         } else {
-            alert('Settings saved!');
+            showToast("Settings saved!", "success");
         }
       }
     } catch (error: any) {
-      console.error('Failed to save settings remotely: ' + getErrorMessage(error));
-      alert('Failed to save settings: ' + getErrorMessage(error));
+      showToast(getErrorMessage(error), "error");
     } finally {
       setLoading(false);
     }
   };
 
   const handleRoleSwitch = async () => {
-      if (!userProfile.id) {
-          console.error("User ID missing, cannot switch role");
-          alert("Please sign in again to switch roles.");
-          return;
-      }
-      
+      if (!userProfile.id) return;
       const currentRole = userProfile.role || 'student';
       const newRole: UserRole = currentRole === 'student' ? 'teacher' : 'student';
       
-      if (!window.confirm(`Are you sure you want to switch to ${newRole} mode?`)) {
-          return;
-      }
+      if (!window.confirm(`Switch to ${newRole} mode?`)) return;
 
       setLoading(true);
       try {
           const { error } = await supabase
           .from('profiles')
-          .upsert({ 
-              id: userProfile.id,
-              role: newRole,
-              email: userProfile.email 
-           }, { onConflict: 'id' });
+          .upsert({ id: userProfile.id, role: newRole, email: userProfile.email }, { onConflict: 'id' });
 
           if (error) throw error;
-          
           setUserProfile((prev: UserProfile) => ({ ...prev, role: newRole }));
-          
-          // Redirect to HOME 
-          setView(ViewState.HOME); 
+          setView(ViewState.HOME);
+          showToast(`Switched to ${newRole} mode`, "success");
       } catch (err: any) {
-          console.error("Error switching role:", getErrorMessage(err));
-          alert("Failed to switch role. Please try again.");
+          showToast(getErrorMessage(err), "error");
       } finally {
           setLoading(false);
       }
@@ -640,34 +610,54 @@ function App() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        await supabase
-          .from('profiles')
-          .upsert({
+        await supabase.from('profiles').upsert({
             id: user.id,
             completed_stories: Array.from(newSet)
-          }, { onConflict: 'id' });
+        }, { onConflict: 'id' });
 
         if (selectedStory) {
-            await supabase
-                .from('student_results')
-                .insert({
-                    student_id: user.id,
-                    exercise_title: title,
-                    exercise_type: selectedType,
-                    score: score,
-                    max_score: maxScore,
-                    details: details
-                });
+            await supabase.from('student_results').insert({
+                student_id: user.id,
+                exercise_title: title,
+                exercise_type: selectedType,
+                score: score,
+                max_score: maxScore,
+                details: details
+            });
             
-            await checkForHomeworkCompletion(title, selectedType, score, maxScore);
+            // Check for homework completion
+            const assignment = myHomework.find(h => 
+                h.exercise_title === title && 
+                h.exercise_type === selectedType && 
+                h.status !== 'completed'
+            );
+
+            if (assignment) {
+                const { error } = await supabase
+                    .from('homework_assignments')
+                    .update({ 
+                        status: 'completed',
+                        completed_at: new Date().toISOString(),
+                        score: score,
+                        max_score: maxScore
+                    })
+                    .eq('id', assignment.id);
+                
+                if (!error) {
+                    setMyHomework(prev => prev.map(h => 
+                        h.id === assignment.id 
+                            ? { ...h, status: 'completed', score, maxScore, completed_at: new Date().toISOString() } 
+                            : h
+                    ));
+                    showToast("Homework task completed!", "success");
+                }
+            }
         }
       }
     } catch (error) {
       console.error('Failed to save progress', error);
     }
   };
-
-  // --- Navigation & View Logic ---
 
   const startExercise = (story: Story, type: ExerciseType) => {
     setSelectedStory(story);
@@ -709,6 +699,24 @@ function App() {
   const totalCompleted = completedStories.size;
   const progressPercentage = Math.round((totalCompleted / totalTasks) * 100) || 0;
   const pendingHomeworkCount = myHomework.filter(h => h.status === 'pending' || (h.status === 'overdue' && new Date() > new Date(h.due_date))).length;
+
+  // -- Render Components -- 
+  
+  const ToastContainer = () => (
+    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2">
+      {toasts.map(t => (
+        <div key={t.id} className={`px-4 py-3 rounded-xl shadow-lg border text-sm font-bold flex items-center gap-2 animate-slide-in-right ${
+          t.type === 'success' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+          t.type === 'error' ? 'bg-rose-50 text-rose-700 border-rose-200' :
+          'bg-slate-50 text-slate-700 border-slate-200'
+        }`}>
+          {t.type === 'success' && <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>}
+          {t.type === 'error' && <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>}
+          {t.message}
+        </div>
+      ))}
+    </div>
+  );
 
   const CategoryCard = ({ title, subtitle, count, onClick, colorClass, icon, delay, badge }: any) => {
     let iconBgColor = 'bg-gray-100 text-gray-600';
@@ -769,7 +777,8 @@ function App() {
             <input type="password" required minLength={6} className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={password} onChange={e => setPassword(e.target.value)} />
           </div>
 
-          <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-xl font-bold transition-all shadow-lg shadow-indigo-200 active:scale-95 disabled:opacity-70">
+          <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-xl font-bold transition-all shadow-lg shadow-indigo-200 active:scale-95 disabled:opacity-70 flex items-center justify-center gap-2">
+            {loading && <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>}
             {loading ? 'Processing...' : (isLoginMode ? 'Sign In' : 'Sign Up')}
           </button>
         </form>
@@ -1138,6 +1147,9 @@ function App() {
                               <p className="text-slate-500">{selectedStudentForView.email}</p>
                           </div>
                           <div className="flex gap-4">
+                              <button onClick={() => openAssignHomeworkModal(selectedStudentForView)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-bold text-sm shadow-md transition-all active:scale-95">
+                                Assign Homework
+                              </button>
                               <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm text-center">
                                   <div className="text-2xl font-bold text-indigo-600">{studentResults.length}</div>
                                   <div className="text-xs text-slate-400 uppercase font-bold">Attempts</div>
@@ -1317,6 +1329,7 @@ function App() {
             onAssign={handleAssignHomework}
             loading={loading}
           />
+          <ToastContainer />
       </div>
   );
 
@@ -1354,8 +1367,8 @@ function App() {
       {view === ViewState.HOMEWORK_LIST && (
           <StudentHomeworkView 
             assignments={myHomework}
-            onBack={goHome}
             onStartExercise={startExercise}
+            onBack={goHome}
           />
       )}
       
@@ -1371,6 +1384,8 @@ function App() {
             loading={loading}
           />
       )}
+      
+      <ToastContainer />
     </div>
   );
 }
