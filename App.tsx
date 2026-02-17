@@ -1,25 +1,41 @@
-
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { supabase } from './services/supabaseClient';
-import { AuthChangeEvent, Session } from '@supabase/supabase-js';
-import { Story, ExerciseType, AttemptDetail, UserProfile, UserRole, HomeworkAssignment, StudentResult } from './types';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { 
+  Story, 
+  ExerciseType, 
+  UserProfile, 
+  StudentResult, 
+  HomeworkAssignment, 
+  AttemptDetail,
+  UserRole
+} from './types';
 import ExerciseCard from './components/ExerciseCard';
 import ExerciseView from './components/ExerciseView';
 import StudentHomeworkView from './components/StudentHomeworkView';
 import HomeworkModal from './components/HomeworkModal';
-
 import { grammarStories } from './data/grammar';
 import { vocabStories } from './data/vocabulary';
 import { readingStories } from './data/reading';
 import { readingTrueFalseStories } from './data/readingTrueFalse';
-import { speakingStories } from './data/speaking'; // Fixed import path
+import { speakingStories } from './data/speaking';
+import { writingStories } from './data/writing';
 import { oralStories } from './data/oral';
 import { monologueStories } from './data/monologue';
-import { writingStories } from './data/writing';
 import { listeningStories } from './data/listening';
+import { supabase } from './services/supabaseClient';
+import { AuthChangeEvent, Session } from '@supabase/supabase-js';
 
 const allReadingStories = [...readingStories, ...readingTrueFalseStories];
 const allOralStories = [...oralStories, ...monologueStories];
+
+const allStories: (Story & { type: ExerciseType })[] = [
+  ...grammarStories.map(s => ({ ...s, type: ExerciseType.GRAMMAR })),
+  ...vocabStories.map(s => ({ ...s, type: ExerciseType.VOCABULARY })),
+  ...allReadingStories.map(s => ({ ...s, type: ExerciseType.READING })),
+  ...speakingStories.map(s => ({ ...s, type: ExerciseType.SPEAKING })),
+  ...allOralStories.map(s => ({ ...s, type: ExerciseType.ORAL_SPEECH })),
+  ...writingStories.map(s => ({ ...s, type: ExerciseType.WRITING })),
+  ...listeningStories.map(s => ({ ...s, type: ExerciseType.LISTENING })),
+];
 
 enum ViewState {
   REGISTRATION,
@@ -109,7 +125,7 @@ function App() {
   // Toast State
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
 
-  const totalTasks = grammarStories.length + vocabStories.length + allReadingStories.length + listeningStories.length + speakingStories.length + allOralStories.length + writingStories.length;
+  const totalTasks = allStories.length;
 
   // Add Toast
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -720,6 +736,28 @@ function App() {
   const progressPercentage = Math.round((totalCompleted / totalTasks) * 100) || 0;
   const pendingHomeworkCount = myHomework.filter(h => h.status === 'pending' || (h.status === 'overdue' && new Date() > new Date(h.due_date))).length;
 
+  // -- Teacher Analytics (Correctly placed at top level) --
+  const performanceData = useMemo(() => {
+      if (!studentResults || studentResults.length === 0) return [];
+      
+      const stats: Record<string, { totalScore: number, maxScore: number, count: number }> = {};
+      
+      studentResults.forEach(res => {
+          if (!stats[res.exercise_type]) {
+              stats[res.exercise_type] = { totalScore: 0, maxScore: 0, count: 0 };
+          }
+          stats[res.exercise_type].totalScore += res.score;
+          stats[res.exercise_type].maxScore += res.max_score;
+          stats[res.exercise_type].count += 1;
+      });
+
+      return Object.keys(stats).map(type => {
+          const data = stats[type];
+          const percentage = data.maxScore > 0 ? Math.round((data.totalScore / data.maxScore) * 100) : 0;
+          return { type: type as ExerciseType, percentage, count: data.count };
+      });
+  }, [studentResults]);
+
   // -- Render Components -- 
   
   const ToastContainer = () => (
@@ -738,7 +776,7 @@ function App() {
     </div>
   );
 
-  const CategoryCard = ({ title, subtitle, count, onClick, colorClass, icon, delay, badge }: any) => {
+  const CategoryCard = ({ title, subtitle, count, onClick, colorClass, icon, delay, badge, stats }: any) => {
     let iconBgColor = 'bg-gray-100 text-gray-600';
     if (colorClass.includes('indigo')) iconBgColor = 'bg-indigo-100 text-indigo-600';
     if (colorClass.includes('teal')) iconBgColor = 'bg-teal-100 text-teal-600';
@@ -755,11 +793,20 @@ function App() {
         className="bg-white p-8 rounded-3xl shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer border border-slate-100 flex flex-col items-start gap-4 h-full group relative"
         style={{ animationDelay: `${delay}ms` }}
       >
-        {badge && (
-          <div className="absolute top-4 right-4 bg-rose-500 text-white text-xs font-bold px-2 py-1 rounded-full animate-bounce">
-            {badge}
-          </div>
-        )}
+        <div className="absolute top-4 right-4 flex items-center gap-2">
+            {stats && (
+                <div className="bg-white border border-slate-200 text-slate-500 text-xs font-bold px-2 py-1 rounded-lg shadow-sm flex items-center gap-1">
+                    <span className={`w-2 h-2 rounded-full ${stats.completed === stats.total && stats.total > 0 ? 'bg-emerald-500' : 'bg-slate-300'}`}></span>
+                    {stats.completed}/{stats.total}
+                </div>
+            )}
+            {badge && (
+              <div className="bg-rose-500 text-white text-xs font-bold px-2 py-1 rounded-full animate-bounce shadow-sm">
+                {badge}
+              </div>
+            )}
+        </div>
+
         <div className={`p-4 rounded-2xl ${iconBgColor} transition-transform group-hover:scale-110`}>
             {icon}
         </div>
@@ -772,260 +819,19 @@ function App() {
     );
   };
 
-  // ... (Registration, ForgotPassword, RoleSelection, Settings, Home render functions from previous context are reused implicitly)
-  // To keep file size manageable and focus on fixes, I'll assume they are present or you can copy from previous turn if needed.
-  // Including only modified/relevant sections for clarity:
+  const getCategoryStats = (stories: Story[]) => {
+      const total = stories.length;
+      const completed = stories.filter(s => completedStories.has(s.title)).length;
+      return { completed, total };
+  };
+  
+  const getHomeworkStats = () => {
+     const total = myHomework.length;
+     const completed = myHomework.filter(h => h.status === 'completed').length;
+     return { completed, total };
+  };
 
-  const renderRegistration = () => (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-      <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md border border-slate-100">
-        <h2 className="text-3xl font-extrabold text-slate-900 mb-2">{isLoginMode ? 'Welcome Back' : 'Create Account'}</h2>
-        <p className="text-slate-500 mb-8">{isLoginMode ? 'Sign in to continue learning.' : 'Start your learning journey today.'}</p>
-        
-        {authError && <div className="mb-4 p-3 bg-rose-50 text-rose-600 rounded-xl text-sm font-bold">{authError}</div>}
-        {authSuccessMsg && <div className="mb-4 p-3 bg-emerald-50 text-emerald-600 rounded-xl text-sm font-bold">{authSuccessMsg}</div>}
-
-        <form onSubmit={handleAuth} className="space-y-4">
-          {!isLoginMode && (
-            <div>
-              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Full Name</label>
-              <input type="text" required className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={fullName} onChange={e => setFullName(e.target.value)} />
-            </div>
-          )}
-          <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label>
-            <input type="email" required className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={email} onChange={e => setEmail(e.target.value)} />
-          </div>
-          <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Password</label>
-            <input type="password" required minLength={6} className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={password} onChange={e => setPassword(e.target.value)} />
-          </div>
-
-          <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-xl font-bold transition-all shadow-lg shadow-indigo-200 active:scale-95 disabled:opacity-70 flex items-center justify-center gap-2">
-            {loading && <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>}
-            {loading ? 'Processing...' : (isLoginMode ? 'Sign In' : 'Sign Up')}
-          </button>
-        </form>
-
-        <div className="mt-6 text-center text-sm text-slate-500 font-medium">
-          {isLoginMode ? (
-            <>
-              Don't have an account? <button onClick={() => { setIsLoginMode(false); setAuthError(null); }} className="text-indigo-600 font-bold hover:underline">Sign Up</button>
-              <div className="mt-2"><button onClick={() => setView(ViewState.FORGOT_PASSWORD)} className="text-slate-400 hover:text-slate-600">Forgot Password?</button></div>
-            </>
-          ) : (
-            <>
-              Already have an account? <button onClick={() => { setIsLoginMode(true); setAuthError(null); }} className="text-indigo-600 font-bold hover:underline">Sign In</button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderForgotPassword = () => (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-      <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md border border-slate-100">
-        <h2 className="text-2xl font-bold text-slate-900 mb-2">Reset Password</h2>
-        <p className="text-slate-500 mb-6 text-sm">Enter your email to receive a reset link.</p>
-        {authError && <div className="mb-4 p-3 bg-rose-50 text-rose-600 rounded-xl text-sm font-bold">{authError}</div>}
-        {authSuccessMsg && <div className="mb-4 p-3 bg-emerald-50 text-emerald-600 rounded-xl text-sm font-bold">{authSuccessMsg}</div>}
-        <form onSubmit={handlePasswordReset} className="space-y-4">
-          <div>
-            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label>
-            <input type="email" required className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={email} onChange={e => setEmail(e.target.value)} />
-          </div>
-          <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-xl font-bold transition-all shadow-lg shadow-indigo-200 active:scale-95 disabled:opacity-70">
-            {loading ? 'Sending...' : 'Send Reset Link'}
-          </button>
-        </form>
-        <button onClick={() => setView(ViewState.REGISTRATION)} className="mt-6 w-full text-center text-sm font-bold text-slate-400 hover:text-slate-600">Back to Login</button>
-      </div>
-    </div>
-  );
-
-  const renderRoleSelection = () => (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-      <div className="bg-white p-10 rounded-3xl shadow-xl w-full max-w-lg border border-slate-100 text-center">
-        <h2 className="text-3xl font-extrabold text-slate-900 mb-4">Who are you?</h2>
-        <p className="text-slate-500 mb-10">Select your role to get started.</p>
-        <div className="grid grid-cols-2 gap-6">
-            <button onClick={() => handleRoleSelection('student')} disabled={loading} className="group p-6 rounded-2xl border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50 transition-all flex flex-col items-center gap-4">
-                <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">🎓</div>
-                <div className="font-bold text-slate-700 group-hover:text-indigo-700">Student</div>
-            </button>
-            <button onClick={() => handleRoleSelection('teacher')} disabled={loading} className="group p-6 rounded-2xl border-2 border-slate-100 hover:border-emerald-500 hover:bg-emerald-50 transition-all flex flex-col items-center gap-4">
-                <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">👨‍🏫</div>
-                <div className="font-bold text-slate-700 group-hover:text-emerald-700">Teacher</div>
-            </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderSettings = () => (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-10">
-      <div className="max-w-2xl mx-auto bg-white p-8 md:p-12 rounded-3xl shadow-xl border border-slate-100">
-        <div className="flex items-center justify-between mb-8">
-            <h2 className="text-3xl font-extrabold text-slate-900">Settings</h2>
-            <button onClick={goHome} className="text-slate-400 hover:text-slate-600 font-bold text-sm">Close</button>
-        </div>
-        {authSuccessMsg && <div className="mb-6 p-4 bg-emerald-50 text-emerald-700 rounded-xl font-bold border border-emerald-100">{authSuccessMsg}</div>}
-        <form onSubmit={handleSettingsSave} className="space-y-6">
-            <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Full Name</label>
-                <input type="text" required className="w-full p-4 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all font-bold text-slate-700" value={userProfile.name} onChange={e => setUserProfile({...userProfile, name: e.target.value})} />
-            </div>
-            {userProfile.role === 'student' && (
-                <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Teacher's Email (for homework)</label>
-                    <input type="email" className="w-full p-4 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all font-bold text-slate-700" value={userProfile.teacherEmail} onChange={e => setUserProfile({...userProfile, teacherEmail: e.target.value})} placeholder="teacher@example.com" />
-                </div>
-            )}
-            <div className="pt-6 border-t border-slate-100">
-                <h3 className="font-bold text-slate-900 mb-4">Change Password</h3>
-                <input type="password" placeholder="New Password (leave empty to keep current)" minLength={6} className="w-full p-4 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all font-bold text-slate-700" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
-            </div>
-            <div className="flex items-center justify-between pt-6">
-                <div className="flex gap-4">
-                    <button type="button" onClick={handleLogout} className="px-6 py-3 rounded-xl font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 transition-colors">Sign Out</button>
-                    <button type="button" onClick={handleRoleSwitch} className="px-6 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors" title={`Switch to ${userProfile.role === 'student' ? 'Teacher' : 'Student'} view`}>Switch Role</button>
-                </div>
-                <button type="submit" disabled={loading} className="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95 disabled:opacity-70">
-                    {loading ? 'Saving...' : 'Save Changes'}
-                </button>
-            </div>
-        </form>
-        {userProfile.role === 'teacher' && (
-             <div className="mt-8 pt-8 border-t border-slate-100">
-                 <button onClick={() => setView(ViewState.TEACHER_DASHBOARD)} className="w-full py-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold shadow-lg shadow-emerald-200 transition-all">Go to Teacher Dashboard</button>
-             </div>
-        )}
-      </div>
-    </div>
-  );
-
-  const renderHome = () => (
-    <div className="min-h-screen relative" style={{
-        backgroundImage: 'linear-gradient(#e2e8f0 1px, transparent 1px), linear-gradient(to right, #e2e8f0 1px, transparent 1px)',
-        backgroundSize: '24px 24px'
-    }}>
-      <div className="absolute top-6 right-6 z-10 flex gap-4">
-         {userProfile.role === 'teacher' && (
-            <button
-                onClick={() => setView(ViewState.TEACHER_DASHBOARD)}
-                className="p-3 bg-white/80 hover:bg-white rounded-full shadow-sm backdrop-blur-sm border border-slate-200 transition-all text-slate-500 hover:text-indigo-600"
-                title="Students"
-            >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-            </button>
-         )}
-         <button 
-            onClick={() => setView(ViewState.SETTINGS)}
-            className="p-3 bg-white/80 hover:bg-white rounded-full shadow-sm backdrop-blur-sm border border-slate-200 transition-all text-slate-500 hover:text-indigo-600"
-            title="Settings"
-        >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-        </button>
-      </div>
-      <div className="max-w-7xl mx-auto px-4 py-16 md:py-24">
-        <div className="text-center max-w-3xl mx-auto mb-12">
-            <h1 className="text-4xl md:text-6xl font-extrabold text-slate-900 mb-6 tracking-tight">
-                Подготовка к <span className="text-indigo-600">ОГЭ</span>
-            </h1>
-            <p className="text-lg md:text-xl text-slate-500 leading-relaxed mb-8">
-                Улучшайте грамматику, словарный запас и произношение.
-            </p>
-            <div className="inline-flex items-center gap-6 bg-white/60 backdrop-blur-sm border border-slate-200 rounded-full px-6 py-2.5 shadow-sm text-sm text-slate-500 font-medium">
-                <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                    <span>Completed: <span className="text-slate-900">{totalCompleted}</span></span>
-                </div>
-                <div className="w-px h-3 bg-slate-300"></div>
-                <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                    <span>Progress: <span className="text-slate-900">{progressPercentage}%</span></span>
-                </div>
-            </div>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <CategoryCard 
-                title="Домашнее задание"
-                subtitle="Tasks assigned by teacher."
-                count={pendingHomeworkCount}
-                colorClass="orange"
-                delay={0}
-                badge={pendingHomeworkCount > 0 ? `${pendingHomeworkCount}` : null}
-                onClick={() => setView(ViewState.HOMEWORK_LIST)}
-                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>}
-            />
-            <CategoryCard 
-                title="Аудирование"
-                subtitle="Понимание на слух."
-                count={listeningStories.length}
-                colorClass="cyan"
-                delay={50}
-                onClick={() => setView(ViewState.LISTENING_LIST)}
-                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg>}
-            />
-            <CategoryCard 
-                title="Грамматическая сторона речи"
-                subtitle="Времена и формы глаголов."
-                count={grammarStories.length}
-                colorClass="indigo"
-                delay={100}
-                onClick={() => setView(ViewState.GRAMMAR_LIST)}
-                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>}
-            />
-            <CategoryCard 
-                title="Лексическая сторона речи"
-                subtitle="Словообразование."
-                count={vocabStories.length}
-                colorClass="teal"
-                delay={200}
-                onClick={() => setView(ViewState.VOCAB_LIST)}
-                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" /></svg>}
-            />
-            <CategoryCard 
-                title="Смысловое чтение"
-                subtitle="Понимание текстов."
-                count={allReadingStories.length}
-                colorClass="amber"
-                delay={300}
-                onClick={() => setView(ViewState.READING_LIST)}
-                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>}
-            />
-            <CategoryCard 
-                title="Фонетическая сторона речи"
-                subtitle="Чтение вслух."
-                count={speakingStories.length}
-                colorClass="rose"
-                delay={400}
-                onClick={() => setView(ViewState.SPEAKING_LIST)}
-                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>}
-            />
-            <CategoryCard 
-                title="Говорение"
-                subtitle="Интервью и Монолог."
-                count={allOralStories.length}
-                colorClass="purple"
-                delay={500}
-                onClick={() => setView(ViewState.ORAL_LIST)}
-                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>}
-            />
-            <CategoryCard 
-                title="Письменная речь"
-                subtitle="Электронное письмо."
-                count={writingStories.length}
-                colorClass="blue"
-                delay={600}
-                onClick={() => setView(ViewState.WRITING_LIST)}
-                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>}
-            />
-        </div>
-      </div>
-    </div>
-  );
+  // ... Render Functions ...
 
   const renderList = (stories: Story[], type: ExerciseType) => {
     let title = 'Grammar';
@@ -1078,27 +884,7 @@ function App() {
   };
 
   const renderTeacherDashboard = () => {
-      // Logic for analytics
-      const performanceData = useMemo(() => {
-          if (!studentResults || studentResults.length === 0) return [];
-          
-          const stats: Record<string, { totalScore: number, maxScore: number, count: number }> = {};
-          
-          studentResults.forEach(res => {
-              if (!stats[res.exercise_type]) {
-                  stats[res.exercise_type] = { totalScore: 0, maxScore: 0, count: 0 };
-              }
-              stats[res.exercise_type].totalScore += res.score;
-              stats[res.exercise_type].maxScore += res.max_score;
-              stats[res.exercise_type].count += 1;
-          });
-
-          return Object.keys(stats).map(type => {
-              const data = stats[type];
-              const percentage = data.maxScore > 0 ? Math.round((data.totalScore / data.maxScore) * 100) : 0;
-              return { type: type as ExerciseType, percentage, count: data.count };
-          });
-      }, [studentResults]);
+      // NOTE: performanceData useMemo was removed from here because it is defined at the component top level.
 
       const getTypeColor = (type: ExerciseType) => {
         switch(type) {
@@ -1170,6 +956,10 @@ function App() {
                   )}
               </div>
               <div className="p-4 border-t border-slate-100 flex flex-col gap-2">
+                  <button onClick={() => setView(ViewState.SETTINGS)} className="flex items-center gap-2 text-sm text-slate-500 hover:text-indigo-600 px-2 py-2 rounded hover:bg-slate-50 transition-colors w-full">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                      Back to Settings
+                  </button>
                   <button onClick={goHome} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 px-2 py-2 rounded hover:bg-slate-50 transition-colors w-full">
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
                       Back to Home
@@ -1389,7 +1179,7 @@ function App() {
           <HomeworkModal 
             isOpen={isHomeworkModalOpen} 
             studentName={studentToAssign?.name} 
-            initialStudentId={studentToAssign?.id} 
+            initialStudentId={studentToAssign?.id}
             students={trackedStudents}
             preSelectedTask={quickAssignTask}
             onClose={() => setIsHomeworkModalOpen(false)}
@@ -1406,6 +1196,265 @@ function App() {
   }
 
   // Final return for student views
+  const renderRegistration = () => (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+      <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md border border-slate-100">
+        <h2 className="text-3xl font-extrabold text-slate-900 mb-2">{isLoginMode ? 'Welcome Back' : 'Create Account'}</h2>
+        <p className="text-slate-500 mb-8">{isLoginMode ? 'Sign in to continue learning.' : 'Start your learning journey today.'}</p>
+        
+        {authError && <div className="mb-4 p-3 bg-rose-50 text-rose-600 rounded-xl text-sm font-bold">{authError}</div>}
+        {authSuccessMsg && <div className="mb-4 p-3 bg-emerald-50 text-emerald-600 rounded-xl text-sm font-bold">{authSuccessMsg}</div>}
+
+        <form onSubmit={handleAuth} className="space-y-4">
+          {!isLoginMode && (
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Full Name</label>
+              <input type="text" required className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={fullName} onChange={e => setFullName(e.target.value)} />
+            </div>
+          )}
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label>
+            <input type="email" required className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={email} onChange={e => setEmail(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Password</label>
+            <input type="password" required minLength={6} className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={password} onChange={e => setPassword(e.target.value)} />
+          </div>
+
+          <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-xl font-bold transition-all shadow-lg shadow-indigo-200 active:scale-95 disabled:opacity-70 flex items-center justify-center gap-2">
+            {loading && <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>}
+            {loading ? 'Processing...' : (isLoginMode ? 'Sign In' : 'Sign Up')}
+          </button>
+        </form>
+
+        <div className="mt-6 text-center text-sm text-slate-500 font-medium">
+          {isLoginMode ? (
+            <>
+              Don't have an account? <button onClick={() => { setIsLoginMode(false); setAuthError(null); }} className="text-indigo-600 font-bold hover:underline">Sign Up</button>
+              <div className="mt-2"><button onClick={() => setView(ViewState.FORGOT_PASSWORD)} className="text-slate-400 hover:text-slate-600">Forgot Password?</button></div>
+            </>
+          ) : (
+            <>
+              Already have an account? <button onClick={() => { setIsLoginMode(true); setAuthError(null); }} className="text-indigo-600 font-bold hover:underline">Sign In</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderForgotPassword = () => (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+      <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md border border-slate-100">
+        <h2 className="text-2xl font-bold text-slate-900 mb-2">Reset Password</h2>
+        <p className="text-slate-500 mb-6 text-sm">Enter your email to receive a reset link.</p>
+        {authError && <div className="mb-4 p-3 bg-rose-50 text-rose-600 rounded-xl text-sm font-bold">{authError}</div>}
+        {authSuccessMsg && <div className="mb-4 p-3 bg-emerald-50 text-emerald-600 rounded-xl text-sm font-bold">{authSuccessMsg}</div>}
+        <form onSubmit={handlePasswordReset} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label>
+            <input type="email" required className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={email} onChange={e => setEmail(e.target.value)} />
+          </div>
+          <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-xl font-bold transition-all shadow-lg shadow-indigo-200 active:scale-95 disabled:opacity-70">
+            {loading ? 'Sending...' : 'Send Reset Link'}
+          </button>
+        </form>
+        <button onClick={() => setView(ViewState.REGISTRATION)} className="mt-6 w-full text-center text-sm font-bold text-slate-400 hover:text-slate-600">Back to Login</button>
+      </div>
+    </div>
+  );
+
+  const renderRoleSelection = () => (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+      <div className="bg-white p-10 rounded-3xl shadow-xl w-full max-w-lg border border-slate-100 text-center">
+        <h2 className="text-3xl font-extrabold text-slate-900 mb-4">Who are you?</h2>
+        <p className="text-slate-500 mb-10">Select your role to get started.</p>
+        <div className="grid grid-cols-2 gap-6">
+            <button onClick={() => handleRoleSelection('student')} disabled={loading} className="group p-6 rounded-2xl border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50 transition-all flex flex-col items-center gap-4">
+                <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">🎓</div>
+                <div className="font-bold text-slate-700 group-hover:text-indigo-700">Student</div>
+            </button>
+            <button onClick={() => handleRoleSelection('teacher')} disabled={loading} className="group p-6 rounded-2xl border-2 border-slate-100 hover:border-emerald-500 hover:bg-emerald-50 transition-all flex flex-col items-center gap-4">
+                <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">👨‍🏫</div>
+                <div className="font-bold text-slate-700 group-hover:text-emerald-700">Teacher</div>
+            </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderSettings = () => (
+    <div className="min-h-screen bg-slate-50 p-4 md:p-10">
+      <div className="max-w-2xl mx-auto bg-white p-8 md:p-12 rounded-3xl shadow-xl border border-slate-100">
+        <div className="flex items-center justify-between mb-8">
+            <h2 className="text-3xl font-extrabold text-slate-900">Settings</h2>
+            <button onClick={goHome} className="text-slate-400 hover:text-slate-600 font-bold text-sm">Close</button>
+        </div>
+        {authSuccessMsg && <div className="mb-6 p-4 bg-emerald-50 text-emerald-700 rounded-xl font-bold border border-emerald-100">{authSuccessMsg}</div>}
+        <form onSubmit={handleSettingsSave} className="space-y-6">
+            <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Full Name</label>
+                <input type="text" required className="w-full p-4 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all font-bold text-slate-700" value={userProfile.name} onChange={e => setUserProfile({...userProfile, name: e.target.value})} />
+            </div>
+            {userProfile.role === 'student' && (
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Teacher's Email (for homework)</label>
+                    <input type="email" className="w-full p-4 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all font-bold text-slate-700" value={userProfile.teacherEmail} onChange={e => setUserProfile({...userProfile, teacherEmail: e.target.value})} placeholder="teacher@example.com" />
+                </div>
+            )}
+            <div className="pt-6 border-t border-slate-100">
+                <h3 className="font-bold text-slate-900 mb-4">Change Password</h3>
+                <input type="password" placeholder="New Password (leave empty to keep current)" minLength={6} className="w-full p-4 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all font-bold text-slate-700" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
+            </div>
+            <div className="flex items-center justify-between pt-6">
+                <div className="flex gap-4">
+                    <button type="button" onClick={handleLogout} className="px-6 py-3 rounded-xl font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 transition-colors">Sign Out</button>
+                    <button type="button" onClick={handleRoleSwitch} className="px-6 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors" title={`Switch to ${userProfile.role === 'student' ? 'Teacher' : 'Student'} view`}>Switch Role</button>
+                </div>
+                <button type="submit" disabled={loading} className="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95 disabled:opacity-70">
+                    {loading ? 'Saving...' : 'Save Changes'}
+                </button>
+            </div>
+        </form>
+        {userProfile.role === 'teacher' && (
+             <div className="mt-8 pt-8 border-t border-slate-100">
+                 <button onClick={() => setView(ViewState.TEACHER_DASHBOARD)} className="w-full py-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold shadow-lg shadow-emerald-200 transition-all">Go to Teacher Dashboard</button>
+             </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderHome = () => (
+    <div className="min-h-screen relative" style={{
+        backgroundImage: 'linear-gradient(#e2e8f0 1px, transparent 1px), linear-gradient(to right, #e2e8f0 1px, transparent 1px)',
+        backgroundSize: '24px 24px'
+    }}>
+      <div className="absolute top-6 right-6 z-10 flex gap-4">
+         {userProfile.role === 'teacher' && (
+            <button
+                onClick={() => setView(ViewState.TEACHER_DASHBOARD)}
+                className="p-3 bg-white/80 hover:bg-white rounded-full shadow-sm backdrop-blur-sm border border-slate-200 transition-all text-slate-500 hover:text-indigo-600"
+                title="Students"
+            >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+            </button>
+         )}
+         <button 
+            onClick={() => setView(ViewState.SETTINGS)}
+            className="p-3 bg-white/80 hover:bg-white rounded-full shadow-sm backdrop-blur-sm border border-slate-200 transition-all text-slate-500 hover:text-indigo-600"
+            title="Settings"
+        >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+        </button>
+      </div>
+      <div className="max-w-7xl mx-auto px-4 py-16 md:py-24">
+        <div className="text-center max-w-3xl mx-auto mb-12">
+            <h1 className="text-4xl md:text-6xl font-extrabold text-slate-900 mb-6 tracking-tight">
+                Подготовка к <span className="text-indigo-600">ОГЭ</span>
+            </h1>
+            <p className="text-lg md:text-xl text-slate-500 leading-relaxed mb-8">
+                Улучшайте грамматику, словарный запас и произношение.
+            </p>
+            <div className="inline-flex items-center gap-6 bg-white/60 backdrop-blur-sm border border-slate-200 rounded-full px-6 py-2.5 shadow-sm text-sm text-slate-500 font-medium">
+                <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                    <span>Completed: <span className="text-slate-900">{totalCompleted}</span></span>
+                </div>
+                <div className="w-px h-3 bg-slate-300"></div>
+                <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    <span>Progress: <span className="text-slate-900">{progressPercentage}%</span></span>
+                </div>
+            </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <CategoryCard 
+                title="Домашнее задание"
+                subtitle="Tasks assigned by teacher."
+                count={pendingHomeworkCount}
+                colorClass="orange"
+                delay={0}
+                badge={pendingHomeworkCount > 0 ? `${pendingHomeworkCount}` : null}
+                stats={getHomeworkStats()}
+                onClick={() => setView(ViewState.HOMEWORK_LIST)}
+                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>}
+            />
+            <CategoryCard 
+                title="Аудирование"
+                subtitle="Понимание на слух."
+                count={listeningStories.length}
+                colorClass="cyan"
+                delay={50}
+                stats={getCategoryStats(listeningStories)}
+                onClick={() => setView(ViewState.LISTENING_LIST)}
+                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg>}
+            />
+            <CategoryCard 
+                title="Грамматическая сторона речи"
+                subtitle="Времена и формы глаголов."
+                count={grammarStories.length}
+                colorClass="indigo"
+                delay={100}
+                stats={getCategoryStats(grammarStories)}
+                onClick={() => setView(ViewState.GRAMMAR_LIST)}
+                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>}
+            />
+            <CategoryCard 
+                title="Лексическая сторона речи"
+                subtitle="Словообразование."
+                count={vocabStories.length}
+                colorClass="teal"
+                delay={200}
+                stats={getCategoryStats(vocabStories)}
+                onClick={() => setView(ViewState.VOCAB_LIST)}
+                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" /></svg>}
+            />
+            <CategoryCard 
+                title="Смысловое чтение"
+                subtitle="Понимание текстов."
+                count={allReadingStories.length}
+                colorClass="amber"
+                delay={300}
+                stats={getCategoryStats(allReadingStories)}
+                onClick={() => setView(ViewState.READING_LIST)}
+                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>}
+            />
+            <CategoryCard 
+                title="Фонетическая сторона речи"
+                subtitle="Чтение вслух."
+                count={speakingStories.length}
+                colorClass="rose"
+                delay={400}
+                stats={getCategoryStats(speakingStories)}
+                onClick={() => setView(ViewState.SPEAKING_LIST)}
+                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>}
+            />
+            <CategoryCard 
+                title="Говорение"
+                subtitle="Интервью и Монолог."
+                count={allOralStories.length}
+                colorClass="purple"
+                delay={500}
+                stats={getCategoryStats(allOralStories)}
+                onClick={() => setView(ViewState.ORAL_LIST)}
+                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>}
+            />
+            <CategoryCard 
+                title="Письменная речь"
+                subtitle="Электронное письмо."
+                count={writingStories.length}
+                colorClass="blue"
+                delay={600}
+                stats={getCategoryStats(writingStories)}
+                onClick={() => setView(ViewState.WRITING_LIST)}
+                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>}
+            />
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div>
       {view === ViewState.REGISTRATION && renderRegistration()}

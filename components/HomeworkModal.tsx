@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { ExerciseType } from '../types';
 import { grammarStories } from '../data/grammar';
