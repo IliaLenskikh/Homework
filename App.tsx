@@ -125,6 +125,19 @@ export default function App() {
   const [checkedHomework, setCheckedHomework] = useState<any[]>([]); // List of all completed homework for teacher
   const [selectedStudentForAssignment, setSelectedStudentForAssignment] = useState<TrackedStudent | null>(null); // For assignment flow
 
+  // Live Session State (Teacher)
+  const [liveSessionActive, setLiveSessionActive] = useState(false);
+  const [liveSessionCode, setLiveSessionCode] = useState<string | null>(null);
+  const [sessionParticipants, setSessionParticipants] = useState<string[]>([]); // Student IDs
+  const [currentPushedExercise, setCurrentPushedExercise] = useState<{title: string, type: ExerciseType} | null>(null);
+  const [liveSessionPushTab, setLiveSessionPushTab] = useState<ExerciseType>(ExerciseType.GRAMMAR);
+
+  // Live Session State (Student)
+  const [joinedSessionCode, setJoinedSessionCode] = useState<string | null>(null);
+  const [joinSessionInput, setJoinSessionInput] = useState('');
+  const [incomingExercise, setIncomingExercise] = useState<{title: string, type: ExerciseType} | null>(null);
+  const [showExercisePushModal, setShowExercisePushModal] = useState(false);
+
   // Presence State
   const [onlineUsers, setOnlineUsers] = useState<Record<string, any>>({});
   
@@ -341,6 +354,218 @@ export default function App() {
           fetchAllCheckedHomework();
       }
   }, [dashboardTab, userProfile.role]);
+
+  // LIVE SESSION FUNCTIONS (TEACHER)
+  const startLiveSession = async (sessionTitle: string) => {
+    if (!userProfile.id) return;
+    setLoading(true);
+    // Generate unique 6-character code
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    
+    try {
+      // Note: Assuming 'live_classroom_sessions' table exists as per instruction
+      const { data, error } = await supabase
+        .from('live_classroom_sessions')
+        .insert({
+          teacher_id: userProfile.id,
+          session_code: code,
+          title: sessionTitle,
+          status: 'active' // Active immediately
+        })
+        .select()
+        .single();
+      
+      if (error) throw error;
+      
+      setLiveSessionCode(code);
+      setLiveSessionActive(true);
+      showToast(`Live session started! Code: ${code}`, "success");
+      
+      // Subscribe to participant joins
+      subscribeToSessionParticipants(data.id);
+      
+    } catch (err: any) {
+       // Graceful degradation if table doesn't exist yet
+       if (err.code === '42P01') {
+           showToast("Database not setup for Live Sessions. Run SQL script.", "error");
+       } else {
+           showToast(getErrorMessage(err), "error");
+       }
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  const endLiveSession = async () => {
+      if (!liveSessionCode) return;
+      try {
+          await supabase
+            .from('live_classroom_sessions')
+            .update({ status: 'ended', ended_at: new Date().toISOString() })
+            .eq('session_code', liveSessionCode);
+          
+          setLiveSessionActive(false);
+          setLiveSessionCode(null);
+          setSessionParticipants([]);
+          setCurrentPushedExercise(null);
+          showToast("Session ended", "info");
+      } catch (err) {
+          console.error(err);
+      }
+  };
+
+  const subscribeToSessionParticipants = (sessionId: string) => {
+    const channel = supabase.channel(`session_${sessionId}_participants`);
+    
+    channel
+      .on('postgres_changes', 
+        { event: '*', schema: 'public', table: 'session_participants', filter: `session_id=eq.${sessionId}` },
+        async () => {
+          // Refresh participant list
+          const { data } = await supabase
+            .from('session_participants')
+            .select('student_id, profiles!student_id(full_name)')
+            .eq('session_id', sessionId)
+            .eq('status', 'connected');
+          
+          if (data) {
+            setSessionParticipants(data.map(p => p.student_id));
+          }
+        }
+      )
+      .subscribe();
+  };
+
+  const pushExerciseToStudents = async (exerciseTitle: string, exerciseType: ExerciseType) => {
+    if (!liveSessionCode) {
+      showToast("No active session", "error");
+      return;
+    }
+    
+    try {
+      // Update session with current exercise
+      await supabase
+        .from('live_classroom_sessions')
+        .update({
+          current_exercise_title: exerciseTitle,
+          current_exercise_type: exerciseType,
+          status: 'active'
+        })
+        .eq('session_code', liveSessionCode);
+      
+      // Broadcast to all students via Supabase Realtime
+      const channel = supabase.channel(`session_${liveSessionCode}`);
+      await channel.send({
+        type: 'broadcast',
+        event: 'exercise_pushed',
+        payload: {
+          exerciseTitle,
+          exerciseType,
+          teacherName: userProfile.name,
+          pushedAt: Date.now()
+        }
+      });
+      
+      setCurrentPushedExercise({ title: exerciseTitle, type: exerciseType });
+      showToast(`Pushed "${exerciseTitle}" to ${sessionParticipants.length} students`, "success");
+      
+    } catch (err) {
+      showToast(getErrorMessage(err), "error");
+    }
+  };
+
+  // LIVE SESSION FUNCTIONS (STUDENT)
+  const joinLiveSession = async (codeStr: string) => {
+    if (!userProfile.id) return;
+    if (!codeStr) return;
+    setLoading(true);
+    
+    try {
+      // Verify session exists and is active
+      const { data: session, error: sessionError } = await supabase
+        .from('live_classroom_sessions')
+        .select('*')
+        .eq('session_code', codeStr.toUpperCase())
+        .in('status', ['waiting', 'active'])
+        .single();
+      
+      if (sessionError || !session) {
+        showToast("Invalid or ended session code", "error");
+        setLoading(false);
+        return;
+      }
+      
+      // Add student to participants
+      await supabase
+        .from('session_participants')
+        .insert({
+          session_id: session.id,
+          student_id: userProfile.id,
+          status: 'connected'
+        });
+      
+      setJoinedSessionCode(codeStr.toUpperCase());
+      showToast(`Joined session: ${session.title}`, "success");
+      
+      // Subscribe to exercise pushes
+      subscribeToExercisePushes(codeStr.toUpperCase());
+      
+    } catch (err: any) {
+        if (err.code === '42P01') {
+           showToast("Database not setup for Live Sessions.", "error");
+       } else {
+           showToast(getErrorMessage(err), "error");
+       }
+    } finally {
+        setLoading(false);
+    }
+  };
+
+  const subscribeToExercisePushes = (sessionCode: string) => {
+    const channel = supabase.channel(`session_${sessionCode}`);
+    
+    channel
+      .on('broadcast', { event: 'exercise_pushed' }, (payload) => {
+        // Show notification and open exercise
+        setIncomingExercise({
+          title: payload.payload.exerciseTitle,
+          type: payload.payload.exerciseType
+        });
+        setShowExercisePushModal(true);
+        
+        // Auto-open exercise after 3 seconds if not dismissed
+        // But for better UX, let's just rely on the modal or immediate switch
+      })
+      .subscribe();
+  };
+
+  const handleAcceptPushedExercise = () => {
+    if (!incomingExercise) return;
+    
+    // Find the exercise in the catalog
+    const exercise = allStories.find(s => 
+      s.title === incomingExercise.title && 
+      s.type === incomingExercise.type
+    );
+    
+    if (exercise) {
+      startExercise(exercise, incomingExercise.type, 'CATALOG');
+      setShowExercisePushModal(false);
+    } else {
+        showToast("Exercise not found locally", "error");
+    }
+  };
+
+  // Effect to auto-accept for seamless experience (optional, but requested "immediately opens")
+  useEffect(() => {
+      if (showExercisePushModal && incomingExercise) {
+          const timer = setTimeout(() => {
+              handleAcceptPushedExercise();
+          }, 1500); // Small delay to let user see "Incoming..."
+          return () => clearTimeout(timer);
+      }
+  }, [showExercisePushModal, incomingExercise]);
+
 
   const checkSession = async () => {
     // Silent check, don't show global loading
@@ -1120,6 +1345,16 @@ export default function App() {
   const renderTeacherDashboard = () => {
       const activeSessions = Object.values(liveStudents);
 
+      const allCategoriesForPush = [
+        { type: ExerciseType.GRAMMAR, stories: grammarStories, label: 'Grammar' },
+        { type: ExerciseType.VOCABULARY, stories: vocabStories, label: 'Vocabulary' },
+        { type: ExerciseType.READING, stories: [...readingStories, ...readingTrueFalseStories], label: 'Reading' },
+        { type: ExerciseType.LISTENING, stories: listeningStories, label: 'Listening' },
+        { type: ExerciseType.SPEAKING, stories: speakingStories, label: 'Read Aloud' },
+        { type: ExerciseType.ORAL_SPEECH, stories: [...oralStories, ...monologueStories], label: 'Speaking' },
+        { type: ExerciseType.WRITING, stories: writingStories, label: 'Writing' },
+      ];
+
       return (
       <div className="flex-1 flex flex-col md:flex-row h-full">
           <div className="w-full md:w-64 bg-white/95 backdrop-blur-sm border-r border-slate-200 flex flex-col h-full sticky top-0">
@@ -1175,11 +1410,92 @@ export default function App() {
               {dashboardTab === 'LIVE_VIEW' && (
                   <div>
                       <h2 className="text-2xl font-bold text-slate-900 mb-6">Live Classroom</h2>
+                      
+                      {/* Session Control Header */}
+                      {!liveSessionActive ? (
+                        <div className="bg-white rounded-2xl p-8 border-2 border-dashed border-slate-200 text-center mb-8">
+                          <h3 className="text-xl font-bold text-slate-800 mb-4">Start Live Classroom Session</h3>
+                          <p className="text-slate-500 mb-6">Push exercises to students in real-time and monitor their progress</p>
+                          <button 
+                            onClick={() => startLiveSession("Live Class " + new Date().toLocaleTimeString())}
+                            disabled={loading}
+                            className="bg-indigo-600 text-white px-8 py-4 rounded-xl font-bold shadow-lg hover:bg-indigo-700 transition-all disabled:opacity-50"
+                          >
+                            {loading ? "Starting..." : "Start Live Session"}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-6 mb-8">
+                          {/* Active Session Banner */}
+                          <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-6 rounded-2xl shadow-xl">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <h3 className="text-2xl font-bold mb-2">Live Session Active</h3>
+                                <p className="text-indigo-100">Session Code: <span className="font-mono text-2xl font-black tracking-wider bg-white/20 px-2 py-1 rounded ml-2">{liveSessionCode}</span></p>
+                                <p className="text-indigo-100 text-sm mt-1">{sessionParticipants.length} students connected</p>
+                              </div>
+                              <button 
+                                onClick={endLiveSession}
+                                className="bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg font-bold backdrop-blur"
+                              >
+                                End Session
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Exercise Browser with Push Buttons */}
+                          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+                            <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                <svg className="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+                                Push Exercise to Students
+                            </h4>
+                            
+                            {/* Category Tabs */}
+                            <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
+                                {allCategoriesForPush.map(cat => (
+                                    <button
+                                        key={cat.type}
+                                        onClick={() => setLiveSessionPushTab(cat.type)}
+                                        className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${
+                                            liveSessionPushTab === cat.type 
+                                            ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200' 
+                                            : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                                        }`}
+                                    >
+                                        {cat.label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* Exercise Grid */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
+                              {allCategoriesForPush.find(c => c.type === liveSessionPushTab)?.stories.map((story, idx) => (
+                                <div key={idx} className="border border-slate-100 rounded-xl p-3 hover:border-indigo-300 transition-all group bg-slate-50/50 hover:bg-white">
+                                  <h5 className="font-bold text-sm text-slate-800 mb-1 line-clamp-1">{story.title}</h5>
+                                  <p className="text-[10px] text-slate-400 mb-2 line-clamp-1">{story.text?.substring(0, 40) || story.template?.[0]?.substring(0, 40) || "Exercise..."}</p>
+                                  <button 
+                                    onClick={() => pushExerciseToStudents(story.title, liveSessionPushTab)}
+                                    className="w-full bg-white border border-indigo-200 text-indigo-600 py-1.5 rounded-lg text-xs font-bold mt-1 hover:bg-indigo-600 hover:text-white transition-all flex items-center justify-center gap-2 group-hover:shadow-md"
+                                  >
+                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                    </svg>
+                                    Push Now
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Live Monitoring Grid */}
+                      <h4 className="font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">Student Activity</h4>
                       {activeSessions.length === 0 ? (
-                          <div className="text-center py-20 bg-white/50 backdrop-blur rounded-3xl border-2 border-dashed border-slate-200">
+                          <div className="text-center py-12 bg-white/50 backdrop-blur rounded-3xl border-2 border-dashed border-slate-200">
                               <div className="text-4xl mb-4 text-slate-300">📡</div>
-                              <h3 className="text-lg font-bold text-slate-400">No active students</h3>
-                              <p className="text-slate-400 text-sm mt-1">Students will appear here when they start working.</p>
+                              <h3 className="text-lg font-bold text-slate-400">Waiting for activity...</h3>
+                              <p className="text-slate-400 text-sm mt-1">Students progress will appear here.</p>
                           </div>
                       ) : (
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1457,6 +1773,46 @@ export default function App() {
                     Ready to master your English skills? Choose a category below or check your homework.
                   </p>
                 </div>
+
+                {/* Live Session Join (Student) */}
+                {userProfile.role === 'student' && !joinedSessionCode && (
+                  <div className="mb-8 bg-gradient-to-r from-purple-500 to-pink-500 text-white p-6 rounded-2xl shadow-xl flex flex-col md:flex-row items-center justify-between gap-6 max-w-3xl mx-auto">
+                    <div>
+                      <h3 className="text-xl font-bold mb-1 flex items-center gap-2">
+                        <svg className="w-6 h-6 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728m-9.9-2.829a5 5 0 010-7.07m7.072 0a5 5 0 010 7.07M13 12a1 1 0 11-2 0 1 1 0 012 0z" /></svg>
+                        Join Live Classroom
+                      </h3>
+                      <p className="text-purple-100 text-sm">Enter the session code from your teacher to join.</p>
+                    </div>
+                    <div className="flex gap-2 w-full md:w-auto">
+                      <input 
+                        type="text"
+                        placeholder="CODE (e.g. ABC123)"
+                        className="flex-1 md:w-40 px-4 py-3 rounded-xl text-slate-900 font-bold uppercase tracking-wider outline-none focus:ring-2 focus:ring-white/50"
+                        value={joinSessionInput}
+                        onChange={(e) => setJoinSessionInput(e.target.value.toUpperCase())}
+                      />
+                      <button 
+                        onClick={() => joinLiveSession(joinSessionInput)}
+                        disabled={loading || !joinSessionInput}
+                        className="bg-white text-purple-600 px-6 py-3 rounded-xl font-bold hover:bg-purple-50 transition-all disabled:opacity-50"
+                      >
+                        {loading ? '...' : 'Join'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Live Session Active Banner (Student) */}
+                {joinedSessionCode && (
+                   <div className="mb-8 bg-indigo-600 text-white p-4 rounded-2xl shadow-lg flex items-center justify-between max-w-3xl mx-auto animate-fade-in">
+                       <div className="flex items-center gap-3">
+                           <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
+                           <span className="font-bold">Live Session Active: {joinedSessionCode}</span>
+                       </div>
+                       <div className="text-xs opacity-75">Waiting for teacher instructions...</div>
+                   </div>
+                )}
 
                 {/* Progress Overview */}
                 <div className="bg-white/90 backdrop-blur rounded-3xl p-8 shadow-xl border border-slate-100 mb-12 flex flex-col md:flex-row items-center justify-between gap-8">
