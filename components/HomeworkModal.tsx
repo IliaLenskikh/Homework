@@ -19,13 +19,13 @@ interface TrackedStudent {
 
 interface HomeworkModalProps {
   isOpen: boolean;
-  studentName?: string;
-  initialStudentId?: string; // New prop to ensure we have the ID
-  students?: TrackedStudent[];
+  studentName?: string; // Optional now, if not provided, we allow selection
+  initialStudentId?: string; // Correctly passed ID
+  students?: TrackedStudent[]; // List of available students to assign to
   onClose: () => void;
   onAssign: (studentId: string, selectedExercises: { title: string; type: ExerciseType }[], dueDate: string, instructions: string) => void;
   loading: boolean;
-  preSelectedTask?: { title: string; type: ExerciseType };
+  preSelectedTask?: { title: string; type: ExerciseType }; // If assigning a specific task from the list
 }
 
 const HomeworkModal: React.FC<HomeworkModalProps> = ({ 
@@ -55,16 +55,13 @@ const HomeworkModal: React.FC<HomeworkModalProps> = ({
           setDueDate('');
           setInstructions('');
           
-          // Logic to set the student ID correctly
           if (initialStudentId) {
               setSelectedStudentId(initialStudentId);
-          } else if (students.length > 0) {
+          } else if (!studentName && students.length > 0) {
               setSelectedStudentId(students[0].id);
-          } else {
-              setSelectedStudentId('');
           }
       }
-  }, [isOpen, preSelectedTask, students, initialStudentId]);
+  }, [isOpen, preSelectedTask, students, studentName, initialStudentId]);
 
   if (!isOpen) return null;
 
@@ -97,17 +94,16 @@ const HomeworkModal: React.FC<HomeworkModalProps> = ({
       return;
     }
     
-    // Ensure we have a valid target ID
-    let targetId = selectedStudentId;
+    // Determine target ID: Priority is `initialStudentId` if passed (specific mode), then `selectedStudentId` (dropdown mode)
+    let targetId = initialStudentId || selectedStudentId;
     
-    if (!targetId) {
-        // Fallback: If for some reason state is empty but props provided it
-        if (initialStudentId) targetId = initialStudentId;
-        else if (students.length > 0 && !studentName) targetId = students[0].id;
+    if (!targetId && students.length > 0 && !studentName) {
+        // Fallback for dropdown if state wasn't updated but list exists
+        targetId = students[0].id;
     }
 
     if (!targetId) {
-        alert("Error: No student selected. Please refresh and try again.");
+        alert("Please select a student.");
         return;
     }
 
