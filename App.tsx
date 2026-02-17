@@ -1,6 +1,7 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './services/supabaseClient';
+import { AuthChangeEvent, Session } from '@supabase/supabase-js';
 import { Story, ExerciseType, AttemptDetail, UserProfile, UserRole, HomeworkAssignment, StudentResult } from './types';
 import ExerciseCard from './components/ExerciseCard';
 import ExerciseView from './components/ExerciseView';
@@ -22,6 +23,7 @@ const allOralStories = [...oralStories, ...monologueStories];
 
 enum ViewState {
   REGISTRATION,
+  FORGOT_PASSWORD,
   ROLE_SELECTION,
   HOME,
   SETTINGS,
@@ -61,6 +63,7 @@ function App() {
   // Auth state
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState(''); // For settings/reset
   const [fullName, setFullName] = useState('');
   const [isLoginMode, setIsLoginMode] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -87,6 +90,21 @@ function App() {
 
   useEffect(() => {
     checkSession();
+    
+    // Listen for password recovery events (when user clicks email link)
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event: AuthChangeEvent, session: Session | null) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        if (session) {
+           await loadUserProfile(session.user.id, session.user.email!);
+           setView(ViewState.SETTINGS); // Send them to settings to change password
+           setAuthSuccessMsg("Please set a new password below.");
+        }
+      }
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
   // Load tracked students from local storage on load (Teacher only)
@@ -141,13 +159,16 @@ function App() {
         if (!data.role) {
             setView(ViewState.ROLE_SELECTION);
         } else {
-            setView(ViewState.HOME);
+            if (view === ViewState.REGISTRATION || view === ViewState.ROLE_SELECTION || view === ViewState.FORGOT_PASSWORD) {
+                setView(ViewState.HOME);
+            }
             if (data.role === 'student') {
                 loadHomework(userId);
             }
         }
       } else {
-        setUserProfile({ name: '', email: userEmail, teacherEmail: '' });
+        // Fallback if profile doesn't exist yet, but ensure ID is set so we can create it later
+        setUserProfile({ id: userId, name: '', email: userEmail, teacherEmail: '' });
         setView(ViewState.ROLE_SELECTION);
       }
     } catch (e) {
@@ -204,20 +225,44 @@ function App() {
     }
   };
 
+  const handlePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setAuthError(null);
+    setAuthSuccessMsg(null);
+    
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      });
+      
+      if (error) throw error;
+      setAuthSuccessMsg("Password reset link has been sent to your email. Check your spam folder.");
+    } catch (error: any) {
+      setAuthError(getErrorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleRoleSelection = async (role: UserRole) => {
       setLoading(true);
       try {
           const { data: { user } } = await supabase.auth.getUser();
           if (!user) throw new Error("No user found");
 
+          // Use upsert to ensure profile exists
           const { error } = await supabase
               .from('profiles')
-              .update({ role: role })
-              .eq('id', user.id);
+              .upsert({ 
+                  id: user.id, 
+                  role: role,
+                  email: user.email 
+              }, { onConflict: 'id' });
 
           if (error) throw error;
 
-          setUserProfile(prev => ({ ...prev, role }));
+          setUserProfile((prev: UserProfile) => ({ ...prev, id: user.id, role }));
           setView(ViewState.HOME);
       } catch (err: any) {
           setAuthError(getErrorMessage(err));
@@ -249,7 +294,6 @@ function App() {
           
           if (error || !profile) return null;
 
-          // Fetch pending homework count
           const { count } = await supabase
             .from('homework_assignments')
             .select('*', { count: 'exact', head: true })
@@ -319,7 +363,6 @@ function App() {
       setLoading(true);
       
       try {
-          // Fetch results
           const { data: results, error: resError } = await supabase
             .from('student_results')
             .select('*')
@@ -330,7 +373,6 @@ function App() {
               setStudentResults(results as StudentResult[]);
           }
 
-          // Fetch homework
           await fetchStudentHomework(student.id);
 
       } catch (err) {
@@ -431,6 +473,7 @@ function App() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
+        // 1. Update Profile Data
         const { error } = await supabase
           .from('profiles')
           .upsert({
@@ -441,17 +484,34 @@ function App() {
           }, { onConflict: 'id' });
 
         if (error) throw error;
+
+        // 2. Update Password if provided
+        if (newPassword) {
+            const { error: pwdError } = await supabase.auth.updateUser({
+                password: newPassword
+            });
+            if (pwdError) throw pwdError;
+            setNewPassword(''); // Clear after success
+            alert('Settings and Password updated successfully!');
+        } else {
+            alert('Settings saved!');
+        }
       }
     } catch (error: any) {
       console.error('Failed to save settings remotely: ' + getErrorMessage(error));
+      alert('Failed to save settings: ' + getErrorMessage(error));
     } finally {
-      setView(ViewState.HOME);
       setLoading(false);
     }
   };
 
   const handleRoleSwitch = async () => {
-      if (!userProfile.id) return;
+      // Ensure we have a valid user ID to update
+      if (!userProfile.id) {
+          console.error("User ID missing, cannot switch role");
+          alert("Please sign in again to switch roles.");
+          return;
+      }
       
       const currentRole = userProfile.role || 'student';
       const newRole: UserRole = currentRole === 'student' ? 'teacher' : 'student';
@@ -462,15 +522,20 @@ function App() {
 
       setLoading(true);
       try {
+          // Use upsert to handle cases where the profile row might be missing
           const { error } = await supabase
           .from('profiles')
-          .update({ role: newRole })
-          .eq('id', userProfile.id);
+          .upsert({ 
+              id: userProfile.id,
+              role: newRole,
+              email: userProfile.email // Ensure email is preserved if creating new row
+           }, { onConflict: 'id' });
 
           if (error) throw error;
           
-          setUserProfile(prev => ({ ...prev, role: newRole }));
+          setUserProfile((prev: UserProfile) => ({ ...prev, role: newRole }));
           
+          // Redirect to HOME to trigger the dashboard check
           setView(ViewState.HOME); 
       } catch (err: any) {
           console.error("Error switching role:", getErrorMessage(err));
@@ -752,6 +817,46 @@ function App() {
     );
   };
 
+  const renderForgotPassword = () => (
+    <div className="min-h-screen flex items-center justify-center p-4 bg-white">
+      <div className="max-w-md w-full">
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-600 text-white mb-6 shadow-indigo-200 shadow-xl">
+             <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
+          </div>
+          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Recover Password</h1>
+          <p className="text-slate-500 mt-2 text-lg">
+            Enter your email to receive a reset link
+          </p>
+        </div>
+        
+        {authSuccessMsg && (
+            <div className="mb-6 p-4 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-100 flex items-start gap-3">
+                <span className="text-sm font-medium">{authSuccessMsg}</span>
+            </div>
+        )}
+
+        <form onSubmit={handlePasswordReset} className="space-y-5 bg-white p-2">
+          <div className="space-y-1">
+            <label className="text-xs font-bold uppercase text-slate-500 ml-1">Email Address</label>
+            <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-5 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" placeholder="student@example.com" />
+          </div>
+          
+          {authError && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100">{authError}</div>}
+          
+          <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg mt-4">
+            {loading ? 'Sending...' : 'Send Reset Link'}
+          </button>
+        </form>
+        <div className="mt-6 text-center">
+          <button onClick={() => { setView(ViewState.REGISTRATION); setAuthError(null); setAuthSuccessMsg(null); }} className="text-sm font-semibold text-slate-500 hover:text-indigo-600">
+            Back to Sign In
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (loading && view === ViewState.REGISTRATION) {
       return <div className="min-h-screen flex items-center justify-center bg-white"><div className="animate-spin h-8 w-8 border-4 border-indigo-600 rounded-full border-t-transparent"></div></div>
   }
@@ -787,7 +892,14 @@ function App() {
             <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-5 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" placeholder="student@example.com" />
           </div>
           <div className="space-y-1">
-            <label className="text-xs font-bold uppercase text-slate-500 ml-1">Password</label>
+            <div className="flex justify-between items-center">
+              <label className="text-xs font-bold uppercase text-slate-500 ml-1">Password</label>
+              {isLoginMode && (
+                <button type="button" onClick={() => setView(ViewState.FORGOT_PASSWORD)} className="text-xs font-bold text-indigo-600 hover:text-indigo-800">
+                  Forgot Password?
+                </button>
+              )}
+            </div>
             <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-5 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" placeholder="••••••••" minLength={6} />
           </div>
           {authError && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100">{authError}</div>}
@@ -853,14 +965,26 @@ function App() {
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
         <h2 className="text-2xl font-bold text-slate-900 mb-8">Profile Settings</h2>
+        
+        {authSuccessMsg && (
+            <div className="mb-6 p-4 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-100 flex items-start gap-3">
+                <span className="text-sm font-medium">{authSuccessMsg}</span>
+            </div>
+        )}
+
         <form onSubmit={handleSettingsSave} className="space-y-6">
           <div className="space-y-1">
             <label className="text-xs font-bold uppercase tracking-wider text-slate-500 ml-1">Name</label>
-            <input type="text" value={userProfile.name} onChange={(e) => setUserProfile({...userProfile, name: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
+            <input type="text" value={userProfile.name} onChange={(e) => setUserProfile((prev: UserProfile) => ({...prev, name: e.target.value}))} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
           </div>
           <div className="space-y-1">
             <label className="text-xs font-bold uppercase tracking-wider text-slate-500 ml-1">Your Email</label>
             <input type="email" value={userProfile.email} disabled className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-400 cursor-not-allowed outline-none" />
+          </div>
+          
+          <div className="space-y-1">
+            <label className="text-xs font-bold uppercase tracking-wider text-slate-500 ml-1">New Password (Optional)</label>
+            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Set a new password" minLength={6} />
           </div>
           
           <div className="space-y-1">
@@ -960,8 +1084,12 @@ function App() {
                   )}
               </div>
               
-              <div className="p-4 border-t border-slate-100">
-                  <button onClick={handleLogout} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800">
+              <div className="p-4 border-t border-slate-100 flex flex-col gap-2">
+                  <button onClick={() => setView(ViewState.SETTINGS)} className="flex items-center gap-2 text-sm text-slate-500 hover:text-indigo-600 px-2 py-2 rounded hover:bg-slate-50 transition-colors w-full">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                      Settings
+                  </button>
+                  <button onClick={handleLogout} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 px-2 py-2 rounded hover:bg-slate-50 transition-colors w-full">
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
                       Sign Out
                   </button>
@@ -1076,7 +1204,7 @@ function App() {
                               {dashboardTab === 'HISTORY' && (
                                 <>
                                   <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                                      <svg className="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
+                                      <svg className="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
                                       Detailed Report
                                   </h3>
                                   
@@ -1087,7 +1215,7 @@ function App() {
                                               <p className="text-xs text-slate-500 mt-1">Reviewing specific answers</p>
                                           </div>
                                           <div className="p-6 space-y-6 max-h-[600px] overflow-y-auto">
-                                              {resultDetail.details && resultDetail.details.map((detail, idx) => (
+                                              {resultDetail.details && resultDetail.details.map((detail: AttemptDetail, idx: number) => (
                                                   <div key={idx} className={`p-4 rounded-xl border ${detail.isCorrect ? 'bg-emerald-50/50 border-emerald-100' : 'bg-rose-50/50 border-rose-100'}`}>
                                                       <div className="flex items-start gap-3">
                                                           <div className={`mt-1 w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${detail.isCorrect ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
@@ -1170,6 +1298,7 @@ function App() {
   return (
     <div>
       {view === ViewState.REGISTRATION && renderRegistration()}
+      {view === ViewState.FORGOT_PASSWORD && renderForgotPassword()}
       {view === ViewState.ROLE_SELECTION && renderRoleSelection()}
       {view === ViewState.HOME && renderHome()}
       {view === ViewState.SETTINGS && renderSettings()}
@@ -1185,7 +1314,7 @@ function App() {
           story={selectedStory} 
           type={selectedType} 
           onBack={() => setView(getBackView())}
-          onComplete={(score, max, details) => handleStoryComplete(selectedStory.title, score, max, details)}
+          onComplete={(score: number, max: number, details: AttemptDetail[]) => handleStoryComplete(selectedStory.title, score, max, details)}
           userProfile={userProfile}
         />
       )}
