@@ -122,6 +122,9 @@ export default function App() {
   // New Teacher Dashboard State
   const [dashboardTab, setDashboardTab] = useState<'LIVE_VIEW' | 'STUDENTS' | 'HOMEWORK' | 'ANALYTICS'>('STUDENTS');
   const [liveStudents, setLiveStudents] = useState<Record<string, LiveSession>>({});
+  // NEW: State for Fullscreen Live View
+  const [expandedStudentId, setExpandedStudentId] = useState<string | null>(null);
+
   const [checkedHomework, setCheckedHomework] = useState<any[]>([]); // List of all completed homework for teacher
   const [selectedStudentForAssignment, setSelectedStudentForAssignment] = useState<TrackedStudent | null>(null); // For assignment flow
 
@@ -1322,7 +1325,6 @@ export default function App() {
                         type={type}
                         onClick={() => startExercise(story, type, 'CATALOG')}
                         isCompleted={isCompleted}
-                        isTeacher={userProfile.role === 'teacher'}
                         onAssign={
                             selectedStudentForAssignment 
                             ? () => assignTaskImmediately(story.title, type) 
@@ -1444,107 +1446,193 @@ export default function App() {
                           </div>
 
                           {/* Exercise Browser with Push Buttons */}
-                          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
-                            <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                                <svg className="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
-                                Push Exercise to Students
-                            </h4>
-                            
-                            {/* Category Tabs */}
-                            <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
-                                {allCategoriesForPush.map(cat => (
-                                    <button
-                                        key={cat.type}
-                                        onClick={() => setLiveSessionPushTab(cat.type)}
-                                        className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${
-                                            liveSessionPushTab === cat.type 
-                                            ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200' 
-                                            : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
-                                        }`}
-                                    >
-                                        {cat.label}
-                                    </button>
-                                ))}
-                            </div>
+                          {!expandedStudentId && (
+                            <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+                              <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                  <svg className="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+                                  Push Exercise to Students
+                              </h4>
+                              
+                              {/* Category Tabs */}
+                              <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
+                                  {allCategoriesForPush.map(cat => (
+                                      <button
+                                          key={cat.type}
+                                          onClick={() => setLiveSessionPushTab(cat.type)}
+                                          className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${
+                                              liveSessionPushTab === cat.type 
+                                              ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200' 
+                                              : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
+                                          }`}
+                                      >
+                                          {cat.label}
+                                      </button>
+                                  ))}
+                              </div>
 
-                            {/* Exercise Grid */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
-                              {allCategoriesForPush.find(c => c.type === liveSessionPushTab)?.stories.map((story, idx) => (
-                                <div key={idx} className="border border-slate-100 rounded-xl p-3 hover:border-indigo-300 transition-all group bg-slate-50/50 hover:bg-white">
-                                  <h5 className="font-bold text-sm text-slate-800 mb-1 line-clamp-1">{story.title}</h5>
-                                  <p className="text-[10px] text-slate-400 mb-2 line-clamp-1">{story.text?.substring(0, 40) || story.template?.[0]?.substring(0, 40) || "Exercise..."}</p>
-                                  <button 
-                                    onClick={() => pushExerciseToStudents(story.title, liveSessionPushTab)}
-                                    className="w-full bg-white border border-indigo-200 text-indigo-600 py-1.5 rounded-lg text-xs font-bold mt-1 hover:bg-indigo-600 hover:text-white transition-all flex items-center justify-center gap-2 group-hover:shadow-md"
-                                  >
-                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                                    </svg>
-                                    Push Now
-                                  </button>
-                                </div>
-                              ))}
+                              {/* Exercise Grid */}
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
+                                {allCategoriesForPush.find(c => c.type === liveSessionPushTab)?.stories.map((story, idx) => (
+                                  <div key={idx} className="border border-slate-100 rounded-xl p-3 hover:border-indigo-300 transition-all group bg-slate-50/50 hover:bg-white">
+                                    <h5 className="font-bold text-sm text-slate-800 mb-1 line-clamp-1">{story.title}</h5>
+                                    <p className="text-[10px] text-slate-400 mb-2 line-clamp-1">{story.text?.substring(0, 40) || story.template?.[0]?.substring(0, 40) || "Exercise..."}</p>
+                                    <button 
+                                      onClick={() => pushExerciseToStudents(story.title, liveSessionPushTab)}
+                                      className="w-full bg-white border border-indigo-200 text-indigo-600 py-1.5 rounded-lg text-xs font-bold mt-1 hover:bg-indigo-600 hover:text-white transition-all flex items-center justify-center gap-2 group-hover:shadow-md"
+                                    >
+                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                      </svg>
+                                      Push Now
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
-                          </div>
+                          )}
                         </div>
                       )}
 
                       {/* Live Monitoring Grid */}
-                      <h4 className="font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">Student Activity</h4>
-                      {activeSessions.length === 0 ? (
-                          <div className="text-center py-12 bg-white/50 backdrop-blur rounded-3xl border-2 border-dashed border-slate-200">
-                              <div className="text-4xl mb-4 text-slate-300">📡</div>
-                              <h3 className="text-lg font-bold text-slate-400">Waiting for activity...</h3>
-                              <p className="text-slate-400 text-sm mt-1">Students progress will appear here.</p>
-                          </div>
+                      
+                      {/* View Logic: Either Grid (Overview) or Single (Fullscreen) */}
+                      {expandedStudentId ? (
+                          // --- FULLSCREEN MODE ---
+                          (() => {
+                              const expandedSession = liveStudents[expandedStudentId];
+                              if (!expandedSession) {
+                                  // Fallback if student disconnects
+                                  setExpandedStudentId(null);
+                                  return null;
+                              }
+                              
+                              const isIdle = Date.now() - expandedSession.lastActivity > 120000;
+                              
+                              return (
+                                <div className="animate-fade-in flex flex-col gap-6 h-full min-h-[calc(100vh-200px)]">
+                                   {/* Header */}
+                                   <div className="flex items-center justify-between">
+                                       <button 
+                                          onClick={() => setExpandedStudentId(null)}
+                                          className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-bold transition-colors bg-white px-4 py-2 rounded-xl shadow-sm border border-slate-200 hover:border-indigo-200"
+                                       >
+                                           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+                                           Back to Overview
+                                       </button>
+                                       <div className="flex items-center gap-3">
+                                           <h3 className="text-2xl font-extrabold text-slate-900">{expandedSession.studentName}</h3>
+                                           <div className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2 ${isIdle ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                               <span className={`w-2 h-2 rounded-full ${isIdle ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'}`}></span>
+                                               {isIdle ? 'Idle' : 'Live'}
+                                           </div>
+                                       </div>
+                                   </div>
+
+                                   {/* Question Context */}
+                                   <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
+                                       <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Current Question / Task</h4>
+                                       <p className="text-lg text-slate-800 font-medium leading-relaxed">
+                                           {expandedSession.currentQuestion ? expandedSession.currentQuestion : 
+                                            expandedSession.exerciseTitle ? `Working on: ${expandedSession.exerciseTitle}` : "Waiting for activity..."}
+                                       </p>
+                                   </div>
+
+                                   {/* HUGE Live Input Area */}
+                                   <div className={`flex-1 bg-white p-8 rounded-2xl border-2 shadow-sm flex flex-col min-h-[300px] transition-colors relative overflow-hidden ${
+                                       expandedSession.isCorrect === true ? 'border-emerald-200 bg-emerald-50/30' :
+                                       expandedSession.isCorrect === false ? 'border-rose-200 bg-rose-50/30' :
+                                       'border-indigo-200'
+                                   }`}>
+                                       <div className="flex items-center gap-3 mb-6">
+                                           <div className="w-3 h-3 bg-rose-500 rounded-full animate-pulse"></div>
+                                           <span className="text-sm font-bold text-rose-500 uppercase tracking-widest">Student is typing</span>
+                                       </div>
+                                       
+                                       <div className="flex-1 font-mono text-3xl md:text-4xl leading-relaxed text-slate-900 break-words whitespace-pre-wrap">
+                                           {expandedSession.userInput}
+                                           <span className="animate-pulse text-indigo-400">|</span>
+                                       </div>
+
+                                       {/* Correctness Indicator */}
+                                       {expandedSession.isCorrect !== null && (
+                                           <div className={`mt-auto self-start px-6 py-3 rounded-xl text-xl font-bold shadow-sm flex items-center gap-2 ${
+                                               expandedSession.isCorrect 
+                                               ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' 
+                                               : 'bg-rose-100 text-rose-700 border border-rose-200'
+                                           }`}>
+                                               {expandedSession.isCorrect 
+                                                ? <><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg> Correct</> 
+                                                : <><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg> Incorrect</>
+                                               }
+                                           </div>
+                                       )}
+                                   </div>
+                                </div>
+                              );
+                          })()
                       ) : (
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                              {activeSessions.map(session => {
-                                  const isIdle = Date.now() - session.lastActivity > 120000;
-                                  const isStuck = session.isCorrect === false && session.userInput.length > 5;
-                                  
-                                  return (
-                                      <div key={session.studentId} className={`bg-white p-6 rounded-2xl shadow-sm border-2 transition-all ${isStuck ? 'border-rose-300 bg-rose-50' : isIdle ? 'border-amber-300 bg-amber-50' : 'border-emerald-300'}`}>
-                                          <div className="flex justify-between items-start mb-4">
-                                              <div className="flex items-center gap-3">
-                                                  <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold text-sm">
-                                                      {session.studentName.substring(0,2).toUpperCase()}
-                                                  </div>
-                                                  <div>
-                                                      <h4 className="font-bold text-slate-800 leading-none">{session.studentName}</h4>
-                                                      <span className="text-xs text-slate-500">{session.exerciseType}</span>
-                                                  </div>
-                                              </div>
-                                              <div className={`w-3 h-3 rounded-full ${isIdle ? 'bg-amber-400' : 'bg-emerald-500 animate-pulse'}`}></div>
-                                          </div>
-                                          
-                                          <div className="mb-4">
-                                              <div className="text-xs font-bold text-slate-400 uppercase mb-1">Current Task</div>
-                                              <div className="text-sm font-medium text-slate-800 line-clamp-1">{session.exerciseTitle}</div>
-                                          </div>
+                          // --- OVERVIEW GRID MODE ---
+                          <>
+                            <h4 className="font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2 flex justify-between items-center">
+                                <span>Student Activity</span>
+                                <span className="text-xs font-normal text-slate-400">Click a card to expand</span>
+                            </h4>
+                            
+                            {activeSessions.length === 0 ? (
+                                <div className="text-center py-12 bg-white/50 backdrop-blur rounded-3xl border-2 border-dashed border-slate-200">
+                                    <div className="text-4xl mb-4 text-slate-300">📡</div>
+                                    <h3 className="text-lg font-bold text-slate-400">Waiting for activity...</h3>
+                                    <p className="text-slate-400 text-sm mt-1">Students progress will appear here.</p>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    {activeSessions.map(session => {
+                                        const isIdle = Date.now() - session.lastActivity > 120000;
+                                        // Compact card
+                                        return (
+                                            <div 
+                                                key={session.studentId} 
+                                                onClick={() => setExpandedStudentId(session.studentId)}
+                                                className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer h-48 flex flex-col justify-between group"
+                                            >
+                                                {/* Header */}
+                                                <div className="flex justify-between items-start">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm border border-indigo-100 group-hover:bg-indigo-100 transition-colors">
+                                                            {session.studentName.substring(0,2).toUpperCase()}
+                                                        </div>
+                                                        <div>
+                                                            <h4 className="font-bold text-slate-800 leading-none truncate max-w-[120px]">{session.studentName}</h4>
+                                                            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{session.exerciseType}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className={`w-2.5 h-2.5 rounded-full ${isIdle ? 'bg-amber-400' : 'bg-emerald-500 animate-pulse'}`}></div>
+                                                </div>
+                                                
+                                                {/* Task Title */}
+                                                <div className="mt-2">
+                                                    <div className="text-sm font-medium text-slate-600 line-clamp-1" title={session.exerciseTitle}>
+                                                        {session.exerciseTitle}
+                                                    </div>
+                                                </div>
 
-                                          <div className="mb-4">
-                                              <div className="flex justify-between text-xs font-bold text-slate-400 mb-1">
-                                                  <span>Progress</span>
-                                                  <span>{session.progressPercentage}%</span>
-                                              </div>
-                                              <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
-                                                  <div className="bg-indigo-500 h-full transition-all duration-500" style={{ width: `${session.progressPercentage}%` }}></div>
-                                              </div>
-                                          </div>
-
-                                          <div className="bg-slate-100 p-3 rounded-xl border border-slate-200">
-                                              <div className="text-[10px] font-bold text-slate-400 uppercase mb-1">Live Input</div>
-                                              <div className="flex items-center gap-2">
-                                                  <span className="font-mono text-sm text-slate-800 flex-1 truncate">{session.userInput || 'Typing...'}</span>
-                                                  {session.isCorrect === true && <span className="text-emerald-500 text-lg">✓</span>}
-                                                  {session.isCorrect === false && <span className="text-rose-500 text-lg">✗</span>}
-                                              </div>
-                                          </div>
-                                      </div>
-                                  );
-                              })}
-                          </div>
+                                                {/* Input Preview (Footer) */}
+                                                <div className={`mt-auto p-3 rounded-lg border text-xs font-mono transition-colors ${
+                                                    session.isCorrect === true ? 'bg-emerald-50 border-emerald-100 text-emerald-800' :
+                                                    session.isCorrect === false ? 'bg-rose-50 border-rose-100 text-rose-800' :
+                                                    'bg-slate-50 border-slate-100 text-slate-600 group-hover:bg-white'
+                                                }`}>
+                                                    <div className="text-[10px] font-bold opacity-50 uppercase mb-1">Live Input:</div>
+                                                    <div className="truncate h-4">
+                                                        {session.userInput || <span className="opacity-40 italic">Typing...</span>}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                          </>
                       )}
                   </div>
               )}
