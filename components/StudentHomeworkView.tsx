@@ -15,9 +15,11 @@ interface StudentHomeworkViewProps {
   assignments: HomeworkAssignment[];
   onStartExercise: (story: Story, type: ExerciseType) => void;
   onBack: () => void;
+  onRefresh?: () => void;
+  loading?: boolean;
 }
 
-const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, onStartExercise, onBack }) => {
+const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, onStartExercise, onBack, onRefresh, loading }) => {
   
   // Helper to find story object by title and type
   const findStory = (title: string, type: ExerciseType): Story | undefined => {
@@ -57,19 +59,31 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
-      <div className="flex items-center mb-10 pb-6 border-b border-slate-200">
-        <button 
-          onClick={onBack}
-          className="mr-6 p-3 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-300 transition-all shadow-sm group"
-        >
-          <svg className="w-5 h-5 group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-          </svg>
-        </button>
-        <div>
-          <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">Homework Assignments</h2>
-          <p className="text-slate-500 font-medium">Tasks assigned by your teacher</p>
+      <div className="flex items-center justify-between mb-10 pb-6 border-b border-slate-200">
+        <div className="flex items-center">
+            <button 
+            onClick={onBack}
+            className="mr-6 p-3 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-300 transition-all shadow-sm group"
+            >
+            <svg className="w-5 h-5 group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+            </button>
+            <div>
+            <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">Homework Assignments</h2>
+            <p className="text-slate-500 font-medium">Tasks assigned by your teacher</p>
+            </div>
         </div>
+        {onRefresh && (
+            <button 
+                onClick={onRefresh}
+                disabled={loading}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-600 font-bold transition-all active:scale-95 disabled:opacity-50"
+            >
+                <svg className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
+        )}
       </div>
 
       <div className="grid gap-4">

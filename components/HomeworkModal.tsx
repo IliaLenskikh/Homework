@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { ExerciseType, Story } from '../types';
+import { ExerciseType } from '../types';
 import { grammarStories } from '../data/grammar';
 import { vocabStories } from '../data/vocabulary';
 import { readingStories } from '../data/reading';
@@ -19,17 +19,19 @@ interface TrackedStudent {
 
 interface HomeworkModalProps {
   isOpen: boolean;
-  studentName?: string; // Optional now, if not provided, we allow selection
-  students?: TrackedStudent[]; // List of available students to assign to
+  studentName?: string;
+  initialStudentId?: string; // New prop to ensure we have the ID
+  students?: TrackedStudent[];
   onClose: () => void;
   onAssign: (studentId: string, selectedExercises: { title: string; type: ExerciseType }[], dueDate: string, instructions: string) => void;
   loading: boolean;
-  preSelectedTask?: { title: string; type: ExerciseType }; // If assigning a specific task from the list
+  preSelectedTask?: { title: string; type: ExerciseType };
 }
 
 const HomeworkModal: React.FC<HomeworkModalProps> = ({ 
     isOpen, 
     studentName, 
+    initialStudentId,
     students = [], 
     onClose, 
     onAssign, 
@@ -52,13 +54,17 @@ const HomeworkModal: React.FC<HomeworkModalProps> = ({
           }
           setDueDate('');
           setInstructions('');
-          // If we have a single student passed in (old behavior), usually ID is handled by parent, 
-          // but if we are in select mode, reset selection.
-          if (!studentName && students.length > 0) {
+          
+          // Logic to set the student ID correctly
+          if (initialStudentId) {
+              setSelectedStudentId(initialStudentId);
+          } else if (students.length > 0) {
               setSelectedStudentId(students[0].id);
+          } else {
+              setSelectedStudentId('');
           }
       }
-  }, [isOpen, preSelectedTask, students, studentName]);
+  }, [isOpen, preSelectedTask, students, initialStudentId]);
 
   if (!isOpen) return null;
 
@@ -73,7 +79,6 @@ const HomeworkModal: React.FC<HomeworkModalProps> = ({
   ];
 
   const handleToggleTask = (type: ExerciseType, title: string) => {
-    // If pre-selected task mode, don't allow toggling others (or maybe just warn, but sticking to single task is safer for UI)
     if (preSelectedTask) return; 
 
     const key = `${type}:${title}`;
@@ -92,10 +97,17 @@ const HomeworkModal: React.FC<HomeworkModalProps> = ({
       return;
     }
     
+    // Ensure we have a valid target ID
     let targetId = selectedStudentId;
     
-    if (!studentName && !targetId) {
-        alert("Please select a student.");
+    if (!targetId) {
+        // Fallback: If for some reason state is empty but props provided it
+        if (initialStudentId) targetId = initialStudentId;
+        else if (students.length > 0 && !studentName) targetId = students[0].id;
+    }
+
+    if (!targetId) {
+        alert("Error: No student selected. Please refresh and try again.");
         return;
     }
 
@@ -180,7 +192,7 @@ const HomeworkModal: React.FC<HomeworkModalProps> = ({
                 {/* Exercise List */}
                 <div className="flex-1 overflow-y-auto p-6 bg-white">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {allCategories.find(c => c.type === activeTab)?.stories.map((story: Story, idx: number) => {
+                    {allCategories.find(c => c.type === activeTab)?.stories.map((story, idx) => {
                         const key = `${activeTab}:${story.title}`;
                         const isSelected = selectedTasks.includes(key);
                         return (
