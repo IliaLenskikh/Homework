@@ -364,60 +364,61 @@ export default function App() {
   const startLiveSession = async (sessionTitle: string) => {
     if (!userProfile.id) return;
     
-    const { data: existingSession } = await supabase
-      .from('live_classroom_sessions')
-      .select('*')
-      .eq('teacher_id', userProfile.id)
-      .eq('status', 'active')
-      .maybeSingle();
-    
-    if (existingSession) {
-      setLiveSessionCode(existingSession.session_code);
-      setLiveSessionActive(true);
-      
-      if (liveSessionBroadcastRef.current) {
-          supabase.removeChannel(liveSessionBroadcastRef.current);
-      }
-      
-      const broadcastChannel = supabase.channel(`session_${existingSession.session_code}`);
-      liveSessionBroadcastRef.current = broadcastChannel;
-      await broadcastChannel.subscribe(); // ✅ Subscribe is mandatory
-
-      showToast(`Reconnected to session: ${existingSession.session_code}`, "success");
-      subscribeToSessionParticipants(existingSession.id);
-      return;
-    }
-    
     setLoading(true);
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
     
     try {
-      const { data, error } = await supabase
+      // 1. Check for existing active session to reuse
+      const { data: existingSession, error: fetchError } = await supabase
         .from('live_classroom_sessions')
-        .insert({
-          teacher_id: userProfile.id,
-          session_code: code,
-          title: sessionTitle,
-          status: 'active' 
-        })
-        .select()
-        .single();
-      
-      if (error) throw error;
+        .select('*')
+        .eq('teacher_id', userProfile.id)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (fetchError) throw fetchError;
+
+      let sessionId = '';
+      let code = '';
+
+      if (existingSession) {
+        // Reuse existing
+        sessionId = existingSession.id;
+        code = existingSession.session_code;
+        showToast(`Reconnected to active session: ${code}`, "success");
+      } else {
+        // Create new
+        code = Math.random().toString(36).substring(2, 8).toUpperCase();
+        const { data: newSession, error: insertError } = await supabase
+          .from('live_classroom_sessions')
+          .insert({
+            teacher_id: userProfile.id,
+            session_code: code,
+            title: sessionTitle,
+            status: 'active' 
+          })
+          .select()
+          .single();
+        
+        if (insertError) throw insertError;
+        sessionId = newSession.id;
+        showToast(`Live session started! Code: ${code}`, "success");
+      }
       
       setLiveSessionCode(code);
       setLiveSessionActive(true);
       
+      // Cleanup previous broadcast channel if exists
       if (liveSessionBroadcastRef.current) {
           supabase.removeChannel(liveSessionBroadcastRef.current);
       }
 
+      // Establish persistent broadcast channel
       const broadcastChannel = supabase.channel(`session_${code}`);
       liveSessionBroadcastRef.current = broadcastChannel;
-      await broadcastChannel.subscribe(); // ✅ Subscribe is mandatory
+      await broadcastChannel.subscribe(); 
 
-      showToast(`Live session started! Code: ${code}`, "success");
-      subscribeToSessionParticipants(data.id);
+      // Listen for participants
+      subscribeToSessionParticipants(sessionId);
       
     } catch (err: any) {
        if (err.code === '42P01') {
@@ -455,6 +456,10 @@ export default function App() {
               supabase.removeChannel(liveSessionBroadcastRef.current);
               liveSessionBroadcastRef.current = null;
           }
+          if (sessionChannelRef.current) {
+              supabase.removeChannel(sessionChannelRef.current);
+              sessionChannelRef.current = null;
+          }
 
           showToast("Session ended", "info");
       } catch (err) {
@@ -490,11 +495,12 @@ export default function App() {
 
   const pushExerciseToStudents = async (exerciseTitle: string, exerciseType: ExerciseType) => {
     if (!liveSessionCode || !liveSessionBroadcastRef.current) {
-      showToast("Session not properly initialized", "error");
+      showToast("Session not properly initialized. Try restarting.", "error");
       return;
     }
     
     try {
+      // Only update current exercise, do not reset status
       await supabase
         .from('live_classroom_sessions')
         .update({
@@ -503,6 +509,7 @@ export default function App() {
         })
         .eq('session_code', liveSessionCode);
       
+      // Use the persistent channel
       await liveSessionBroadcastRef.current.send({
         type: 'broadcast',
         event: 'exercise_pushed',
@@ -515,7 +522,7 @@ export default function App() {
       });
       
       setCurrentPushedExercise({ title: exerciseTitle, type: exerciseType });
-      showToast(`Pushed "${exerciseTitle}" to ${sessionParticipants.length} students`, "success");
+      showToast(`Pushed "${exerciseTitle}" to students`, "success");
       
     } catch (err) {
       showToast(getErrorMessage(err), "error");
@@ -540,7 +547,7 @@ export default function App() {
         return;
       }
 
-      // ✅ Check for existing join record
+      // Check for existing join record to prevent duplicates
       const { data: existing } = await supabase
         .from('session_participants')
         .select('id')
@@ -548,21 +555,15 @@ export default function App() {
         .eq('student_id', userProfile.id)
         .maybeSingle();
       
-      if (existing) {
-        setJoinedSessionCode(codeStr.toUpperCase());
-        subscribeToExercisePushes(codeStr.toUpperCase());
-        showToast("Reconnected to session", "info");
-        setLoading(false);
-        return;
+      if (!existing) {
+          await supabase
+            .from('session_participants')
+            .insert({
+              session_id: session.id,
+              student_id: userProfile.id,
+              status: 'connected'
+            });
       }
-      
-      await supabase
-        .from('session_participants')
-        .insert({
-          session_id: session.id,
-          student_id: userProfile.id,
-          status: 'connected'
-        });
       
       setJoinedSessionCode(codeStr.toUpperCase());
       showToast(`Joined session: ${session.title}`, "success");
@@ -600,6 +601,7 @@ export default function App() {
         showToast("Session ended by teacher", "info");
         setJoinedSessionCode(null);
         setIncomingExercise(null);
+        setShowExercisePushModal(false);
         if (liveSessionChannelRef.current) {
             supabase.removeChannel(liveSessionChannelRef.current);
             liveSessionChannelRef.current = null;
@@ -622,26 +624,27 @@ export default function App() {
         showToast("Exercise not found locally", "error");
     }
     
-    // ✅ Always close and clear
     setShowExercisePushModal(false);
     setIncomingExercise(null);
   };
 
+  // Auto-accept effect with crash fix
   useEffect(() => {
     let isMounted = true;
+    let timer: number | null = null;
     
     if (showExercisePushModal && incomingExercise) {
-      const timer = setTimeout(() => {
+      timer = window.setTimeout(() => {
         if (isMounted) { 
           handleAcceptPushedExercise();
         }
       }, 1500);
-      
-      return () => {
-        isMounted = false;
-        clearTimeout(timer);
-      };
     }
+      
+    return () => {
+        isMounted = false;
+        if (timer) clearTimeout(timer);
+    };
   }, [showExercisePushModal, incomingExercise]);
 
 
@@ -1448,7 +1451,7 @@ export default function App() {
                                            {' '}
                                        </span>
                                    );
-                               })}
+                                })}
                            </div>
                        )}
 
