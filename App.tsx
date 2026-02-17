@@ -91,11 +91,6 @@ function App() {
   const [studentHomework, setStudentHomework] = useState<HomeworkAssignment[]>([]);
   const [dashboardTab, setDashboardTab] = useState<'HISTORY' | 'HOMEWORK'>('HISTORY');
   
-  // Draft Assignments (Shopping Cart for Homework)
-  const [draftAssignments, setDraftAssignments] = useState<{title: string, type: ExerciseType}[]>([]);
-  const [draftDueDate, setDraftDueDate] = useState('');
-  const [draftInstructions, setDraftInstructions] = useState('');
-
   // Homework Modal (Legacy / Quick assign specific)
   const [isHomeworkModalOpen, setIsHomeworkModalOpen] = useState(false);
   const [studentToAssign, setStudentToAssign] = useState<TrackedStudent | null>(null);
@@ -114,12 +109,37 @@ function App() {
            setAuthSuccessMsg("Please set a new password below.");
         }
       }
+      
+      // Reload profile on sign in
+      if (event === 'SIGNED_IN' && session) {
+          await loadUserProfile(session.user.id, session.user.email!);
+      }
     });
 
     return () => {
       authListener.subscription.unsubscribe();
     };
   }, []);
+
+  // Realtime subscription for Students
+  useEffect(() => {
+    if (userProfile.role === 'student' && userProfile.id) {
+        const channel = supabase
+            .channel('public:homework_assignments')
+            .on('postgres_changes', 
+                { event: '*', schema: 'public', table: 'homework_assignments', filter: `student_id=eq.${userProfile.id}` }, 
+                (payload) => {
+                    // console.log('Change received!', payload);
+                    loadHomework(userProfile.id!); // Refresh homework on any change
+                }
+            )
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
+    }
+  }, [userProfile.role, userProfile.id]);
 
   useEffect(() => {
       if (userProfile.role === 'teacher') {
@@ -134,6 +154,13 @@ function App() {
           }
       }
   }, [userProfile.role]);
+  
+  // Refresh teacher dashboard view when re-entering it
+  useEffect(() => {
+      if (view === ViewState.TEACHER_DASHBOARD && selectedStudentForView) {
+          handleSelectStudentForView(selectedStudentForView);
+      }
+  }, [view]);
 
   const checkSession = async () => {
     setLoading(true);
@@ -210,9 +237,7 @@ function App() {
           password,
         });
         if (error) throw error;
-        if (data.session) {
-            await loadUserProfile(data.session.user.id, data.session.user.email!);
-        }
+        // User profile loaded via onAuthStateChange or subsequent call
       } else {
         const { data, error } = await supabase.auth.signUp({
           email,
@@ -370,8 +395,8 @@ function App() {
   const handleSelectStudentForView = async (student: TrackedStudent) => {
       setSelectedStudentForView(student);
       setResultDetail(null);
-      setDashboardTab('HISTORY');
-      setLoading(true);
+      // setDashboardTab('HISTORY'); // Keep tab if refreshing
+      // setLoading(true); // Don't block UI if refreshing in bg
       
       try {
           const { data: results, error: resError } = await supabase
@@ -389,7 +414,7 @@ function App() {
       } catch (err) {
           console.error("Failed to load student data", err);
       } finally {
-          setLoading(false);
+          // setLoading(false);
       }
   };
 
@@ -414,47 +439,41 @@ function App() {
     setIsHomeworkModalOpen(true);
   };
 
-  const addToDrafts = (storyTitle: string, exerciseType: ExerciseType) => {
-      setDraftAssignments(prev => [...prev, { title: storyTitle, type: exerciseType }]);
-      // Quick visual feedback
-      const btn = document.activeElement as HTMLElement;
-      if(btn) {
-          const originalText = btn.innerHTML;
-          btn.innerHTML = `✓ Added`;
-          btn.classList.add('bg-emerald-100', 'text-emerald-700');
-          setTimeout(() => {
-              btn.innerHTML = originalText;
-              btn.classList.remove('bg-emerald-100', 'text-emerald-700');
-          }, 1500);
-      }
-  };
-
-  const removeFromDrafts = (idx: number) => {
-      setDraftAssignments(prev => prev.filter((_, i) => i !== idx));
-  };
-
-  // Confirm and Send Drafts from Dashboard
-  const handleConfirmDrafts = async () => {
+  // Instant Assign Function
+  const assignTaskImmediately = async (storyTitle: string, exerciseType: ExerciseType) => {
       if (!selectedStudentForView) {
-          alert("Please select a student from the sidebar first.");
+          alert("Please select a student from the Dashboard first.");
           return;
       }
-      if (draftAssignments.length === 0) {
-          alert("No assignments selected.");
-          return;
-      }
-      if (!draftDueDate) {
-          alert("Please set a due date for these assignments.");
-          return;
-      }
+      if (!userProfile.id) return;
 
-      await handleAssignHomework(selectedStudentForView.id, draftAssignments, draftDueDate, draftInstructions);
-      setDraftAssignments([]); // Clear drafts after success
-      setDraftDueDate('');
-      setDraftInstructions('');
-      setDashboardTab('HOMEWORK'); // Switch to view the list
+      // Default due date: 7 days from now
+      const defaultDueDate = new Date();
+      defaultDueDate.setDate(defaultDueDate.getDate() + 7);
+
+      const { error } = await supabase
+        .from('homework_assignments')
+        .insert({
+            teacher_id: userProfile.id,
+            student_id: selectedStudentForView.id,
+            exercise_title: storyTitle,
+            exercise_type: exerciseType,
+            due_date: defaultDueDate.toISOString(),
+            status: 'pending',
+            instructions: 'Please complete this task.'
+        });
+
+      if (error) {
+          console.error("Assign error", error);
+          alert("Failed to assign: " + getErrorMessage(error));
+      } else {
+          // Refresh background data if needed, though immediate UI update happens in ExerciseCard
+          // We can refresh the student stats in background
+          refreshStudentStats(trackedStudents);
+      }
   };
 
+  // Assign via Modal
   const handleAssignHomework = async (studentId: string, exercises: { title: string; type: ExerciseType }[], dueDate: string, instructions: string) => {
     const targetStudentId = studentId;
     
@@ -478,12 +497,11 @@ function App() {
 
       if (error) throw error;
 
-      // Refresh data
       await fetchStudentHomework(targetStudentId);
       refreshStudentStats(trackedStudents); 
       
       alert('Homework assigned successfully!');
-      setIsHomeworkModalOpen(false); // Close legacy modal if open
+      setIsHomeworkModalOpen(false); 
     } catch (err: any) {
       alert('Failed to assign homework: ' + getErrorMessage(err));
     } finally {
@@ -513,6 +531,7 @@ function App() {
                   .eq('id', assignment.id);
               
               if (!error) {
+                  // Local update
                   setMyHomework(prev => prev.map(h => 
                       h.id === assignment.id 
                           ? { ...h, status: 'completed', score, maxScore, completed_at: new Date().toISOString() } 
@@ -713,6 +732,143 @@ function App() {
     );
   };
 
+  const renderRegistration = () => (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+      <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md border border-slate-100">
+        <h2 className="text-3xl font-extrabold text-slate-900 mb-2">{isLoginMode ? 'Welcome Back' : 'Create Account'}</h2>
+        <p className="text-slate-500 mb-8">{isLoginMode ? 'Sign in to continue learning.' : 'Start your learning journey today.'}</p>
+        
+        {authError && <div className="mb-4 p-3 bg-rose-50 text-rose-600 rounded-xl text-sm font-bold">{authError}</div>}
+        {authSuccessMsg && <div className="mb-4 p-3 bg-emerald-50 text-emerald-600 rounded-xl text-sm font-bold">{authSuccessMsg}</div>}
+
+        <form onSubmit={handleAuth} className="space-y-4">
+          {!isLoginMode && (
+            <div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Full Name</label>
+              <input type="text" required className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={fullName} onChange={e => setFullName(e.target.value)} />
+            </div>
+          )}
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label>
+            <input type="email" required className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={email} onChange={e => setEmail(e.target.value)} />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Password</label>
+            <input type="password" required minLength={6} className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={password} onChange={e => setPassword(e.target.value)} />
+          </div>
+
+          <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-xl font-bold transition-all shadow-lg shadow-indigo-200 active:scale-95 disabled:opacity-70">
+            {loading ? 'Processing...' : (isLoginMode ? 'Sign In' : 'Sign Up')}
+          </button>
+        </form>
+
+        <div className="mt-6 text-center text-sm text-slate-500 font-medium">
+          {isLoginMode ? (
+            <>
+              Don't have an account? <button onClick={() => { setIsLoginMode(false); setAuthError(null); }} className="text-indigo-600 font-bold hover:underline">Sign Up</button>
+              <div className="mt-2"><button onClick={() => setView(ViewState.FORGOT_PASSWORD)} className="text-slate-400 hover:text-slate-600">Forgot Password?</button></div>
+            </>
+          ) : (
+            <>
+              Already have an account? <button onClick={() => { setIsLoginMode(true); setAuthError(null); }} className="text-indigo-600 font-bold hover:underline">Sign In</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderForgotPassword = () => (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+      <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md border border-slate-100">
+        <h2 className="text-2xl font-bold text-slate-900 mb-2">Reset Password</h2>
+        <p className="text-slate-500 mb-6 text-sm">Enter your email to receive a reset link.</p>
+        
+        {authError && <div className="mb-4 p-3 bg-rose-50 text-rose-600 rounded-xl text-sm font-bold">{authError}</div>}
+        {authSuccessMsg && <div className="mb-4 p-3 bg-emerald-50 text-emerald-600 rounded-xl text-sm font-bold">{authSuccessMsg}</div>}
+
+        <form onSubmit={handlePasswordReset} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Email</label>
+            <input type="email" required className="w-full p-3 rounded-xl border border-slate-200 focus:border-indigo-500 outline-none transition-all font-medium" value={email} onChange={e => setEmail(e.target.value)} />
+          </div>
+          <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-xl font-bold transition-all shadow-lg shadow-indigo-200 active:scale-95 disabled:opacity-70">
+            {loading ? 'Sending...' : 'Send Reset Link'}
+          </button>
+        </form>
+        <button onClick={() => setView(ViewState.REGISTRATION)} className="mt-6 w-full text-center text-sm font-bold text-slate-400 hover:text-slate-600">Back to Login</button>
+      </div>
+    </div>
+  );
+
+  const renderRoleSelection = () => (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
+      <div className="bg-white p-10 rounded-3xl shadow-xl w-full max-w-lg border border-slate-100 text-center">
+        <h2 className="text-3xl font-extrabold text-slate-900 mb-4">Who are you?</h2>
+        <p className="text-slate-500 mb-10">Select your role to get started.</p>
+        
+        <div className="grid grid-cols-2 gap-6">
+            <button onClick={() => handleRoleSelection('student')} disabled={loading} className="group p-6 rounded-2xl border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50 transition-all flex flex-col items-center gap-4">
+                <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">🎓</div>
+                <div className="font-bold text-slate-700 group-hover:text-indigo-700">Student</div>
+            </button>
+            <button onClick={() => handleRoleSelection('teacher')} disabled={loading} className="group p-6 rounded-2xl border-2 border-slate-100 hover:border-emerald-500 hover:bg-emerald-50 transition-all flex flex-col items-center gap-4">
+                <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-2xl group-hover:scale-110 transition-transform">👨‍🏫</div>
+                <div className="font-bold text-slate-700 group-hover:text-emerald-700">Teacher</div>
+            </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderSettings = () => (
+    <div className="min-h-screen bg-slate-50 p-4 md:p-10">
+      <div className="max-w-2xl mx-auto bg-white p-8 md:p-12 rounded-3xl shadow-xl border border-slate-100">
+        <div className="flex items-center justify-between mb-8">
+            <h2 className="text-3xl font-extrabold text-slate-900">Settings</h2>
+            <button onClick={goHome} className="text-slate-400 hover:text-slate-600 font-bold text-sm">Close</button>
+        </div>
+
+        {authSuccessMsg && <div className="mb-6 p-4 bg-emerald-50 text-emerald-700 rounded-xl font-bold border border-emerald-100">{authSuccessMsg}</div>}
+
+        <form onSubmit={handleSettingsSave} className="space-y-6">
+            <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Full Name</label>
+                <input type="text" required className="w-full p-4 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all font-bold text-slate-700" value={userProfile.name} onChange={e => setUserProfile({...userProfile, name: e.target.value})} />
+            </div>
+            
+            {userProfile.role === 'student' && (
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Teacher's Email (for homework)</label>
+                    <input type="email" className="w-full p-4 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all font-bold text-slate-700" value={userProfile.teacherEmail} onChange={e => setUserProfile({...userProfile, teacherEmail: e.target.value})} placeholder="teacher@example.com" />
+                </div>
+            )}
+
+            <div className="pt-6 border-t border-slate-100">
+                <h3 className="font-bold text-slate-900 mb-4">Change Password</h3>
+                <input type="password" placeholder="New Password (leave empty to keep current)" minLength={6} className="w-full p-4 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all font-bold text-slate-700" value={newPassword} onChange={e => setNewPassword(e.target.value)} />
+            </div>
+
+            <div className="flex items-center justify-between pt-6">
+                <div className="flex gap-4">
+                    <button type="button" onClick={handleLogout} className="px-6 py-3 rounded-xl font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 transition-colors">Sign Out</button>
+                    <button type="button" onClick={handleRoleSwitch} className="px-6 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors" title={`Switch to ${userProfile.role === 'student' ? 'Teacher' : 'Student'} view`}>Switch Role</button>
+                </div>
+                <button type="submit" disabled={loading} className="px-8 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95 disabled:opacity-70">
+                    {loading ? 'Saving...' : 'Save Changes'}
+                </button>
+            </div>
+        </form>
+        
+        {userProfile.role === 'teacher' && (
+             <div className="mt-8 pt-8 border-t border-slate-100">
+                 <button onClick={() => setView(ViewState.TEACHER_DASHBOARD)} className="w-full py-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold shadow-lg shadow-emerald-200 transition-all">Go to Teacher Dashboard</button>
+             </div>
+        )}
+      </div>
+    </div>
+  );
+
   const renderHome = () => (
     <div className="min-h-screen relative" style={{
         backgroundImage: 'linear-gradient(#e2e8f0 1px, transparent 1px), linear-gradient(to right, #e2e8f0 1px, transparent 1px)',
@@ -761,8 +917,9 @@ function App() {
                 delay={0}
                 badge={pendingHomeworkCount > 0 ? `${pendingHomeworkCount}` : null}
                 onClick={() => setView(ViewState.HOMEWORK_LIST)}
-                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>}
+                icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>}
             />
+            {/* Other categories ... */}
             <CategoryCard 
                 title="Аудирование"
                 subtitle="Понимание на слух."
@@ -843,19 +1000,28 @@ function App() {
 
     return (
       <div className="max-w-7xl mx-auto px-4 py-8">
-        <div className="flex items-center mb-10 pb-6 border-b border-slate-200">
-          <button 
-            onClick={goHome}
-            className="mr-6 p-3 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-300 transition-all shadow-sm group"
-          >
-            <svg className="w-5 h-5 group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-          </button>
-          <div>
-            <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">{title}</h2>
-            <p className="text-slate-500 font-medium">{subtitle}</p>
+        <div className="flex items-center mb-10 pb-6 border-b border-slate-200 justify-between">
+          <div className="flex items-center">
+            <button 
+                onClick={goHome}
+                className="mr-6 p-3 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-300 transition-all shadow-sm group"
+            >
+                <svg className="w-5 h-5 group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                </svg>
+            </button>
+            <div>
+                <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">{title}</h2>
+                <p className="text-slate-500 font-medium">{subtitle}</p>
+            </div>
           </div>
+          
+          {userProfile.role === 'teacher' && selectedStudentForView && (
+              <div className="bg-indigo-50 border border-indigo-100 text-indigo-700 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
+                  Assigning to: {selectedStudentForView.name}
+              </div>
+          )}
         </div>
         
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -866,226 +1032,13 @@ function App() {
               type={type}
               onClick={() => startExercise(story, type)}
               isCompleted={completedStories.has(story.title)}
-              onAssign={userProfile.role === 'teacher' ? () => addToDrafts(story.title, type) : undefined}
+              onAssign={userProfile.role === 'teacher' ? () => assignTaskImmediately(story.title, type) : undefined}
             />
           ))}
         </div>
       </div>
     );
   };
-
-  const renderForgotPassword = () => (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-white">
-      <div className="max-w-md w-full">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-600 text-white mb-6 shadow-indigo-200 shadow-xl">
-             <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
-          </div>
-          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Recover Password</h1>
-          <p className="text-slate-500 mt-2 text-lg">
-            Enter your email to receive a reset link
-          </p>
-        </div>
-        
-        {authSuccessMsg && (
-            <div className="mb-6 p-4 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-100 flex items-start gap-3">
-                <span className="text-sm font-medium">{authSuccessMsg}</span>
-            </div>
-        )}
-
-        <form onSubmit={handlePasswordReset} className="space-y-5 bg-white p-2">
-          <div className="space-y-1">
-            <label className="text-xs font-bold uppercase text-slate-500 ml-1">Email Address</label>
-            <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-5 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" placeholder="student@example.com" />
-          </div>
-          
-          {authError && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100">{authError}</div>}
-          
-          <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg mt-4">
-            {loading ? 'Sending...' : 'Send Reset Link'}
-          </button>
-        </form>
-        <div className="mt-6 text-center">
-          <button onClick={() => { setView(ViewState.REGISTRATION); setAuthError(null); setAuthSuccessMsg(null); }} className="text-sm font-semibold text-slate-500 hover:text-indigo-600">
-            Back to Sign In
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  if (loading && view === ViewState.REGISTRATION) {
-      return <div className="min-h-screen flex items-center justify-center bg-white"><div className="animate-spin h-8 w-8 border-4 border-indigo-600 rounded-full border-t-transparent"></div></div>
-  }
-
-  const renderRegistration = () => (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-white">
-      <div className="max-w-md w-full">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-600 text-white mb-6 shadow-indigo-200 shadow-xl">
-             <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>
-          </div>
-          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">OGE Prep</h1>
-          <p className="text-slate-500 mt-2 text-lg">
-            {isLoginMode ? 'Sign in to continue' : 'Create your account'}
-          </p>
-        </div>
-        
-        {authSuccessMsg && (
-            <div className="mb-6 p-4 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-100 flex items-start gap-3">
-                <span className="text-sm font-medium">{authSuccessMsg}</span>
-            </div>
-        )}
-
-        <form onSubmit={handleAuth} className="space-y-5 bg-white p-2">
-          {!isLoginMode && (
-            <div className="space-y-1">
-              <label className="text-xs font-bold uppercase text-slate-500 ml-1">Full Name</label>
-              <input required={!isLoginMode} type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} className="w-full px-5 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" placeholder="Student Name" />
-            </div>
-          )}
-          <div className="space-y-1">
-            <label className="text-xs font-bold uppercase text-slate-500 ml-1">Email Address</label>
-            <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-5 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" placeholder="student@example.com" />
-          </div>
-          <div className="space-y-1">
-            <div className="flex justify-between items-center">
-              <label className="text-xs font-bold uppercase text-slate-500 ml-1">Password</label>
-              {isLoginMode && (
-                <button type="button" onClick={() => setView(ViewState.FORGOT_PASSWORD)} className="text-xs font-bold text-indigo-600 hover:text-indigo-800">
-                  Forgot Password?
-                </button>
-              )}
-            </div>
-            <input required type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-5 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none" placeholder="••••••••" minLength={6} />
-          </div>
-          {authError && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg border border-red-100">{authError}</div>}
-          <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl shadow-lg mt-4">{loading ? '...' : (isLoginMode ? 'Sign In' : 'Create Account')}</button>
-        </form>
-        <div className="mt-6 text-center">
-          <button onClick={() => { setIsLoginMode(!isLoginMode); setAuthError(null); }} className="text-sm font-semibold text-slate-500 hover:text-indigo-600">{isLoginMode ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}</button>
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderRoleSelection = () => (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50">
-          <div className="max-w-2xl w-full text-center">
-              <h2 className="text-3xl font-extrabold text-slate-900 mb-2">Who are you?</h2>
-              <p className="text-slate-500 mb-10">Select your role. You only need to do this once.</p>
-              
-              {authError && (
-                <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-xl border border-red-100 flex items-start gap-3 text-left">
-                    <svg className="w-5 h-5 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    <span className="text-sm font-medium">{authError}</span>
-                </div>
-              )}
-
-              <div className="grid md:grid-cols-2 gap-6">
-                  <button 
-                    onClick={() => handleRoleSelection('student')}
-                    disabled={loading}
-                    className="bg-white p-8 rounded-3xl shadow-sm hover:shadow-xl border border-slate-100 hover:border-indigo-200 transition-all group flex flex-col items-center gap-4 text-center disabled:opacity-70 disabled:cursor-not-allowed"
-                  >
-                      <div className="w-20 h-20 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
-                        <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>
-                      </div>
-                      <div>
-                          <h3 className="text-xl font-bold text-slate-800">I am a Student</h3>
-                          <p className="text-sm text-slate-400 mt-1">I want to practice Grammar, Vocabulary and Reading.</p>
-                      </div>
-                  </button>
-
-                  <button 
-                    onClick={() => handleRoleSelection('teacher')}
-                    disabled={loading}
-                    className="bg-white p-8 rounded-3xl shadow-sm hover:shadow-xl border border-slate-100 hover:border-emerald-200 transition-all group flex flex-col items-center gap-4 text-center disabled:opacity-70 disabled:cursor-not-allowed"
-                  >
-                      <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform">
-                        <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" /></svg>
-                      </div>
-                      <div>
-                          <h3 className="text-xl font-bold text-slate-800">I am a Teacher</h3>
-                          <p className="text-sm text-slate-400 mt-1">I want to track student progress.</p>
-                      </div>
-                  </button>
-              </div>
-          </div>
-      </div>
-  );
-
-  const renderSettings = () => (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-50">
-      <div className="bg-white rounded-3xl shadow-xl p-8 max-w-md w-full relative">
-        <button onClick={goHome} className="absolute top-6 right-6 p-2 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-        </button>
-        <h2 className="text-2xl font-bold text-slate-900 mb-8">Profile Settings</h2>
-        
-        {authSuccessMsg && (
-            <div className="mb-6 p-4 bg-emerald-50 text-emerald-700 rounded-xl border border-emerald-100 flex items-start gap-3">
-                <span className="text-sm font-medium">{authSuccessMsg}</span>
-            </div>
-        )}
-
-        <form onSubmit={handleSettingsSave} className="space-y-6">
-          <div className="space-y-1">
-            <label className="text-xs font-bold uppercase tracking-wider text-slate-500 ml-1">Name</label>
-            <input type="text" value={userProfile.name} onChange={(e) => setUserProfile((prev: UserProfile) => ({...prev, name: e.target.value}))} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs font-bold uppercase tracking-wider text-slate-500 ml-1">Your Email</label>
-            <input type="email" value={userProfile.email} disabled className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-400 cursor-not-allowed outline-none" />
-          </div>
-          
-          <div className="space-y-1">
-            <label className="text-xs font-bold uppercase tracking-wider text-slate-500 ml-1">New Password (Optional)</label>
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="Set a new password" minLength={6} />
-          </div>
-          
-          <div className="space-y-1">
-            <label className="text-xs font-bold uppercase tracking-wider text-slate-500 ml-1">Role</label>
-            <div className="flex items-center gap-3">
-              <div className="flex-1 px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-700 capitalize font-medium flex items-center gap-2">
-                {userProfile.role === 'teacher' ? (
-                   <svg className="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z" /></svg>
-                ) : (
-                   <svg className="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>
-                )}
-                {userProfile.role || 'Student'}
-              </div>
-              <button 
-                type="button" 
-                onClick={handleRoleSwitch}
-                disabled={loading}
-                className="px-4 py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl font-bold transition-colors text-sm whitespace-nowrap border border-indigo-100"
-              >
-                Switch to {userProfile.role === 'student' ? 'Teacher' : 'Student'}
-              </button>
-            </div>
-          </div>
-
-          {/* Teacher Specific Button */}
-          {userProfile.role === 'teacher' && (
-              <button 
-                type="button"
-                onClick={() => setView(ViewState.TEACHER_DASHBOARD)}
-                className="w-full bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-bold py-4 rounded-xl transition-all flex items-center justify-center gap-3"
-              >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
-                  Manage Students & Dashboard
-              </button>
-          )}
-
-          <div className="flex gap-4 pt-4">
-             <button type="button" onClick={handleLogout} className="w-1/3 bg-slate-100 hover:bg-red-50 hover:text-red-600 text-slate-600 font-bold py-4 rounded-xl transition-all">Log Out</button>
-            <button type="submit" disabled={loading} className="w-2/3 bg-slate-900 hover:bg-slate-800 text-white font-bold py-4 rounded-xl transition-all shadow-lg active:scale-95 disabled:opacity-70">{loading ? 'Saving...' : 'Save Changes'}</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
 
   const renderTeacherDashboard = () => (
       <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
@@ -1148,7 +1101,7 @@ function App() {
               
               <div className="p-4 border-t border-slate-100 flex flex-col gap-2">
                   <button onClick={() => setView(ViewState.SETTINGS)} className="flex items-center gap-2 text-sm text-slate-500 hover:text-indigo-600 px-2 py-2 rounded hover:bg-slate-50 transition-colors w-full">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                       Back to Settings
                   </button>
                   <button onClick={goHome} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 px-2 py-2 rounded hover:bg-slate-50 transition-colors w-full">
@@ -1162,7 +1115,7 @@ function App() {
           <div className="flex-1 overflow-y-auto h-screen p-6 md:p-10">
               {!selectedStudentForView ? (
                   <div className="h-full flex flex-col items-center justify-center text-slate-300">
-                      <svg className="w-24 h-24 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
+                      <svg className="w-24 h-24 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
                       <p className="text-lg">Select a student to view details</p>
                   </div>
               ) : (
@@ -1235,41 +1188,6 @@ function App() {
 
                               {dashboardTab === 'HOMEWORK' && (
                                 <div className="space-y-3">
-                                  {/* Drafts Section */}
-                                  {draftAssignments.length > 0 && (
-                                      <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 mb-4">
-                                          <div className="flex justify-between items-center mb-3">
-                                              <h4 className="text-xs font-bold uppercase text-indigo-600">Draft Assignments ({draftAssignments.length})</h4>
-                                              <button onClick={handleConfirmDrafts} disabled={loading} className="px-3 py-1 bg-indigo-600 text-white text-xs font-bold rounded hover:bg-indigo-700 transition-colors">
-                                                  {loading ? 'Sending...' : 'Confirm & Send'}
-                                              </button>
-                                          </div>
-                                          <div className="space-y-2 mb-3">
-                                              {draftAssignments.map((draft, idx) => (
-                                                  <div key={idx} className="flex justify-between items-center text-sm bg-white p-2 rounded border border-indigo-100">
-                                                      <span className="truncate mr-2">{draft.title} <span className="text-slate-400 text-xs">({draft.type})</span></span>
-                                                      <button onClick={() => removeFromDrafts(idx)} className="text-rose-400 hover:text-rose-600">✕</button>
-                                                  </div>
-                                              ))}
-                                          </div>
-                                          <div className="space-y-2">
-                                              <input 
-                                                  type="date" 
-                                                  value={draftDueDate}
-                                                  onChange={(e) => setDraftDueDate(e.target.value)}
-                                                  className="w-full p-2 text-xs border border-indigo-200 rounded bg-white outline-none focus:border-indigo-400"
-                                              />
-                                              <input 
-                                                  type="text" 
-                                                  placeholder="Instructions (optional)"
-                                                  value={draftInstructions}
-                                                  onChange={(e) => setDraftInstructions(e.target.value)}
-                                                  className="w-full p-2 text-xs border border-indigo-200 rounded bg-white outline-none focus:border-indigo-400"
-                                              />
-                                          </div>
-                                      </div>
-                                  )}
-
                                   {/* Assigned Homework List */}
                                   {studentHomework.map(hw => {
                                     const isOverdue = new Date() > new Date(hw.due_date) && hw.status !== 'completed';
@@ -1292,7 +1210,7 @@ function App() {
                                       </div>
                                     );
                                   })}
-                                  {studentHomework.length === 0 && draftAssignments.length === 0 && <div className="text-slate-400 text-sm">No homework assigned yet.</div>}
+                                  {studentHomework.length === 0 && <div className="text-slate-400 text-sm">No homework assigned yet.</div>}
                                 </div>
                               )}
                           </div>
@@ -1394,6 +1312,9 @@ function App() {
   if (view === ViewState.TEACHER_DASHBOARD) {
       return renderTeacherDashboard();
   }
+
+  // --- Render Functions are now implicitly using updated methods ---
+  // We need to ensure `renderList` and others use the new assign method.
 
   return (
     <div>
