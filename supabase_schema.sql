@@ -110,3 +110,56 @@ drop policy if exists "Authenticated Users Upload Audio" on storage.objects;
 create policy "Authenticated Users Upload Audio" 
   on storage.objects for insert 
   with check ( bucket_id = 'audio-responses' and auth.role() = 'authenticated' );
+
+-- 5. Live Classroom Sessions
+create table if not exists public.live_classroom_sessions (
+  id uuid default gen_random_uuid() primary key,
+  teacher_id uuid references public.profiles(id) not null,
+  session_code text unique not null,
+  title text not null,
+  status text check (status in ('waiting', 'active', 'ended')) default 'waiting',
+  current_exercise_title text,
+  current_exercise_type text,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  started_at timestamp with time zone,
+  ended_at timestamp with time zone
+);
+
+alter table public.live_classroom_sessions enable row level security;
+
+-- Policies for Sessions
+drop policy if exists "Teachers can manage their sessions" on public.live_classroom_sessions;
+create policy "Teachers can manage their sessions"
+  on public.live_classroom_sessions
+  for all
+  using ( auth.uid() = teacher_id );
+
+drop policy if exists "Students can view active sessions" on public.live_classroom_sessions;
+create policy "Students can view active sessions"
+  on public.live_classroom_sessions
+  for select
+  using ( status IN ('waiting', 'active') );
+
+-- 6. Session Participants
+create table if not exists public.session_participants (
+  id uuid default gen_random_uuid() primary key,
+  session_id uuid references public.live_classroom_sessions(id) on delete cascade not null,
+  student_id uuid references public.profiles(id) not null,
+  joined_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  status text check (status in ('connected', 'disconnected')) default 'connected'
+);
+
+alter table public.session_participants enable row level security;
+
+-- Policies for Participants
+drop policy if exists "Participants viewable by everyone in session" on public.session_participants;
+create policy "Participants viewable by everyone in session"
+  on public.session_participants
+  for select
+  using ( true );
+
+drop policy if exists "Students can join sessions" on public.session_participants;
+create policy "Students can join sessions"
+  on public.session_participants
+  for insert
+  with check ( auth.uid() = student_id );
