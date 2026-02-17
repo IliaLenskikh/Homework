@@ -1,5 +1,5 @@
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { HomeworkAssignment, Story, ExerciseType } from '../types';
 import { grammarStories } from '../data/grammar';
 import { vocabStories } from '../data/vocabulary';
@@ -20,6 +20,7 @@ interface StudentHomeworkViewProps {
 }
 
 const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, onStartExercise, onBack, onRefresh, loading }) => {
+  const [selectedDateGroup, setSelectedDateGroup] = useState<string | null>(null);
   
   // Helper to find story object by title and type
   const findStory = (title: string, type: ExerciseType): Story | undefined => {
@@ -36,16 +37,29 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
     return source.find(s => s.title === title);
   };
 
+  const getBadgeStyle = (type: string) => {
+    switch(type) {
+      case ExerciseType.GRAMMAR: return 'bg-indigo-50 text-indigo-700 border-indigo-100';
+      case ExerciseType.VOCABULARY: return 'bg-teal-50 text-teal-700 border-teal-100';
+      case ExerciseType.SPEAKING: return 'bg-rose-50 text-rose-700 border-rose-100';
+      case ExerciseType.ORAL_SPEECH: return 'bg-purple-50 text-purple-700 border-purple-100';
+      case ExerciseType.WRITING: return 'bg-blue-50 text-blue-700 border-blue-100';
+      case ExerciseType.READING: return 'bg-amber-50 text-amber-700 border-amber-100';
+      case ExerciseType.LISTENING: return 'bg-cyan-50 text-cyan-700 border-cyan-100';
+      default: return 'bg-gray-50 text-gray-700 border-gray-100';
+    }
+  };
+
   const getStatusBadge = (status: string, dueDate: string) => {
     const isLate = new Date() > new Date(dueDate) && status !== 'completed';
     
     if (status === 'completed') {
-      return <span className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-xs font-bold uppercase">Completed</span>;
+      return <span className="absolute top-4 right-4 px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-[10px] font-bold uppercase tracking-wider border border-emerald-200 shadow-sm flex items-center gap-1"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Done</span>;
     }
     if (isLate || status === 'overdue') {
-      return <span className="px-3 py-1 bg-rose-100 text-rose-700 rounded-full text-xs font-bold uppercase">Overdue</span>;
+      return <span className="absolute top-4 right-4 px-2 py-1 bg-rose-100 text-rose-700 rounded-lg text-[10px] font-bold uppercase tracking-wider border border-rose-200 shadow-sm">Overdue</span>;
     }
-    return <span className="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold uppercase">Pending</span>;
+    return null; 
   };
 
   // Group assignments by creation date
@@ -63,9 +77,9 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
 
     sortedAll.forEach(task => {
         // Fallback to today if created_at is missing for some reason
-        const dateKey = task.created_at 
-            ? new Date(task.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
-            : "Recent";
+        const dateObj = task.created_at ? new Date(task.created_at) : new Date();
+        // Format: 25.04 (DD.MM)
+        const dateKey = dateObj.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
             
         if (!groups[dateKey]) {
             groups[dateKey] = [];
@@ -78,16 +92,24 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
 
   // Get sorted date keys (Newest dates first)
   const sortedDateKeys = Object.keys(groupedAssignments).sort((a, b) => {
-      if (a === "Recent") return -1;
-      return new Date(b).getTime() - new Date(a).getTime();
+      // Assuming format DD.MM, we need to be careful with sorting across years, 
+      // but for school homework usually within a year. 
+      // Let's rely on the original assignment date order if possible or just string compare for simplicity if format is uniform.
+      // Better: finding the first assignment in the group and comparing timestamps.
+      const taskA = groupedAssignments[a][0];
+      const taskB = groupedAssignments[b][0];
+      return new Date(taskB.created_at).getTime() - new Date(taskA.created_at).getTime();
   });
 
+  const activeDateGroup = selectedDateGroup ? groupedAssignments[selectedDateGroup] : [];
+
   return (
-    <div className="max-w-5xl mx-auto px-4 py-8">
+    <div className="max-w-7xl mx-auto px-4 py-8">
+      {/* Header */}
       <div className="flex items-center justify-between mb-10 pb-6 border-b border-slate-200">
         <div className="flex items-center">
             <button 
-            onClick={onBack}
+            onClick={selectedDateGroup ? () => setSelectedDateGroup(null) : onBack}
             className="mr-6 p-3 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-300 transition-all shadow-sm group"
             >
             <svg className="w-5 h-5 group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -95,11 +117,15 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
             </svg>
             </button>
             <div>
-            <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">Homework Assignments</h2>
-            <p className="text-slate-500 font-medium">Tasks assigned by your teacher</p>
+                <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">
+                    {selectedDateGroup ? `Homework for ${selectedDateGroup}` : 'Homework'}
+                </h2>
+                <p className="text-slate-500 font-medium">
+                    {selectedDateGroup ? 'Complete the tasks below' : 'Select a date folder'}
+                </p>
             </div>
         </div>
-        {onRefresh && (
+        {onRefresh && !selectedDateGroup && (
             <button 
                 onClick={onRefresh}
                 disabled={loading}
@@ -111,67 +137,137 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
         )}
       </div>
 
-      <div className="space-y-8">
+      <div className="space-y-12">
         {assignments.length === 0 ? (
           <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-200">
             <div className="text-6xl mb-4">🎉</div>
             <h3 className="text-xl font-bold text-slate-800">No homework assigned!</h3>
             <p className="text-slate-500">Enjoy your free time.</p>
           </div>
-        ) : (
-            sortedDateKeys.map(dateKey => (
-                <div key={dateKey}>
-                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4 pl-1 border-l-4 border-indigo-200 ml-1">
-                        Assigned: {dateKey}
-                    </h3>
-                    <div className="grid gap-4">
-                        {groupedAssignments[dateKey].map((task) => {
-                            const story = findStory(task.exercise_title, task.exercise_type);
+        ) : selectedDateGroup ? (
+            // View 2: Task List for Selected Date
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in">
+                {activeDateGroup.map((task) => {
+                    const story = findStory(task.exercise_title, task.exercise_type);
+                    const badgeStyle = getBadgeStyle(task.exercise_type);
+                    
+                    return (
+                        <div 
+                        key={task.id} 
+                        className={`bg-white rounded-2xl p-6 shadow-sm border border-slate-100 hover:shadow-lg hover:border-indigo-100 transition-all duration-300 flex flex-col relative overflow-hidden group h-full ${task.status === 'completed' ? 'opacity-75 grayscale-[0.5] hover:grayscale-0' : ''}`}
+                        >
+                        {getStatusBadge(task.status, task.due_date)}
+
+                        <div className="flex-1 mb-6">
+                            <span className={`inline-block px-3 py-1 rounded-lg text-xs font-bold uppercase tracking-wide border mb-4 ${badgeStyle}`}>
+                                {task.exercise_type.replace('_', ' ')}
+                            </span>
                             
-                            return (
-                              <div key={task.id} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-3 mb-2">
-                                    {getStatusBadge(task.status, task.due_date)}
-                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wide">{task.exercise_type.replace('_', ' ')}</span>
-                                  </div>
-                                  <h3 className="text-lg font-bold text-slate-800 mb-1">{task.exercise_title}</h3>
-                                  {task.instructions && (
-                                    <div className="text-sm text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-100 mt-2 inline-block">
-                                      <span className="font-bold text-slate-400 mr-2">Note:</span> {task.instructions}
-                                    </div>
-                                  )}
-                                  <div className="text-xs text-slate-400 mt-3 font-medium flex items-center gap-4">
-                                    <span className="flex items-center gap-1">
-                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                                      Due: {new Date(task.due_date).toLocaleDateString()}
-                                    </span>
-                                    {task.score !== undefined && task.status === 'completed' && (
-                                      <span className="text-emerald-600 font-bold">Score: {task.score} / {task.max_score}</span>
-                                    )}
-                                  </div>
-                                </div>
-                
-                                {task.status !== 'completed' && story && (
-                                  <button 
+                            <h3 className="font-bold text-lg text-slate-800 leading-tight mb-2 group-hover:text-indigo-600 transition-colors">
+                                {task.exercise_title}
+                            </h3>
+                            
+                            {task.instructions ? (
+                                <p className="text-sm text-slate-500 bg-slate-50 p-2 rounded-lg border border-slate-100 line-clamp-3">
+                                    <span className="font-bold text-xs text-slate-400 uppercase block mb-1">Note:</span>
+                                    {task.instructions}
+                                </p>
+                            ) : (
+                                <p className="text-sm text-slate-400 line-clamp-2">
+                                    {story?.text?.substring(0, 60) || "Complete the task..."}
+                                </p>
+                            )}
+                        </div>
+
+                        <div className="pt-4 border-t border-slate-50 flex items-center justify-between text-xs font-medium mt-auto">
+                            <span className={`flex items-center gap-1 ${new Date() > new Date(task.due_date) && task.status !== 'completed' ? 'text-rose-500 font-bold' : 'text-slate-400'}`}>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                Due: {new Date(task.due_date).toLocaleDateString()}
+                            </span>
+
+                            {task.status !== 'completed' && story ? (
+                                <button 
                                     onClick={() => onStartExercise(story, task.exercise_type)}
-                                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-bold text-sm shadow-lg shadow-indigo-200 transition-all active:scale-95 shrink-0 w-full md:w-auto"
-                                  >
-                                    Start Exercise
-                                  </button>
+                                    className="group-hover:translate-x-1 transition-transform text-indigo-600 font-bold flex items-center gap-1"
+                                >
+                                    Start
+                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                                </button>
+                            ) : (
+                                task.score !== undefined && (
+                                    <span className="font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded">
+                                        Score: {task.score} / {task.max_score}
+                                    </span>
+                                )
+                            )}
+                        </div>
+                        </div>
+                    );
+                })}
+            </div>
+        ) : (
+            // View 1: Date Folders
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {sortedDateKeys.map(dateKey => {
+                    const tasks = groupedAssignments[dateKey];
+                    const pendingCount = tasks.filter(t => t.status === 'pending').length;
+                    const overdueCount = tasks.filter(t => t.status === 'overdue' || (new Date() > new Date(t.due_date) && t.status !== 'completed')).length;
+                    const completedCount = tasks.filter(t => t.status === 'completed').length;
+                    const total = tasks.length;
+                    
+                    const isAllDone = completedCount === total && total > 0;
+                    const hasOverdue = overdueCount > 0;
+
+                    return (
+                        <div 
+                            key={dateKey}
+                            onClick={() => setSelectedDateGroup(dateKey)}
+                            className="bg-white p-8 rounded-3xl shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer border border-slate-100 flex flex-col group relative overflow-hidden"
+                        >
+                            <div className="absolute top-0 right-0 p-4">
+                                {isAllDone ? (
+                                    <div className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center">
+                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                    </div>
+                                ) : (
+                                    <div className="bg-slate-100 text-slate-500 text-xs font-bold px-3 py-1 rounded-full border border-slate-200">
+                                        {completedCount}/{total}
+                                    </div>
                                 )}
-                                
-                                {task.status === 'completed' && (
-                                   <div className="w-12 h-12 bg-emerald-50 text-emerald-500 rounded-full flex items-center justify-center shrink-0">
-                                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
-                                   </div>
+                            </div>
+
+                            <div className={`p-4 rounded-2xl w-fit mb-4 transition-transform group-hover:scale-110 ${hasOverdue ? 'bg-rose-100 text-rose-600' : isAllDone ? 'bg-emerald-100 text-emerald-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+                            </div>
+
+                            <h3 className="text-xl font-bold text-slate-900 mb-2 group-hover:text-indigo-600 transition-colors">
+                                Homework for {dateKey}
+                            </h3>
+                            
+                            <div className="flex flex-col gap-1 text-sm font-medium mt-2">
+                                {hasOverdue && (
+                                    <span className="text-rose-500 flex items-center gap-1">
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                        {overdueCount} Overdue
+                                    </span>
                                 )}
-                              </div>
-                            );
-                          })}
-                    </div>
-                </div>
-            ))
+                                {pendingCount > 0 && (
+                                    <span className="text-slate-500">
+                                        {pendingCount} tasks pending
+                                    </span>
+                                )}
+                                {isAllDone && (
+                                    <span className="text-emerald-500">All tasks completed!</span>
+                                )}
+                            </div>
+                            
+                            <div className="mt-auto pt-6 flex items-center text-slate-400 text-xs font-bold uppercase tracking-wider group-hover:text-indigo-500 transition-colors">
+                                View Tasks <svg className="w-4 h-4 ml-1 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
         )}
       </div>
     </div>

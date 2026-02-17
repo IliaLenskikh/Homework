@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Story, 
@@ -19,8 +20,8 @@ import { readingTrueFalseStories } from './data/readingTrueFalse';
 import { speakingStories } from './data/speaking';
 import { writingStories } from './data/writing';
 import { oralStories } from './data/oral';
-import { monologueStories } from './data/monologue';
-import { listeningStories } from './data/listening';
+import { monologueStories } from '../data/monologue';
+import { listeningStories } from '../data/listening';
 import { supabase } from './services/supabaseClient';
 import { AuthChangeEvent, Session } from '@supabase/supabase-js';
 
@@ -62,6 +63,7 @@ interface TrackedStudent {
     completedCount: number;
     totalTasks: number;
     pendingHomeworkCount?: number;
+    isOnline?: boolean; // New field for UI
 }
 
 // Toast Notification Type
@@ -117,6 +119,9 @@ function App() {
   const [studentHomework, setStudentHomework] = useState<HomeworkAssignment[]>([]);
   const [dashboardTab, setDashboardTab] = useState<'HISTORY' | 'HOMEWORK'>('HISTORY');
   
+  // Presence State
+  const [onlineUsers, setOnlineUsers] = useState<Record<string, any>>({});
+  
   // Homework Modal
   const [isHomeworkModalOpen, setIsHomeworkModalOpen] = useState(false);
   const [studentToAssign, setStudentToAssign] = useState<TrackedStudent | null>(null);
@@ -167,7 +172,47 @@ function App() {
     };
   }, []);
 
-  // Realtime subscription for Students
+  // Presence Subscription (Online Status)
+  useEffect(() => {
+    let channel: any;
+
+    if (userProfile.id && userProfile.name) {
+        channel = supabase.channel('classroom_global');
+        
+        channel
+            .on('presence', { event: 'sync' }, () => {
+                const state = channel.presenceState();
+                const users: Record<string, any> = {};
+                
+                // Flatten state
+                Object.values(state).forEach((presences: any) => {
+                    presences.forEach((p: any) => {
+                        users[p.id] = p;
+                    });
+                });
+                
+                setOnlineUsers(users);
+            })
+            .subscribe(async (status: string) => {
+                if (status === 'SUBSCRIBED') {
+                    await channel.track({
+                        id: userProfile.id,
+                        name: userProfile.name,
+                        role: userProfile.role,
+                        online_at: new Date().toISOString(),
+                    });
+                }
+            });
+    }
+
+    return () => {
+        if (channel) {
+            supabase.removeChannel(channel);
+        }
+    };
+  }, [userProfile.id, userProfile.name, userProfile.role]);
+
+  // Realtime subscription for Students (Homework updates)
   useEffect(() => {
     let channel: any;
     if (userProfile.role === 'student' && userProfile.id) {
@@ -776,6 +821,46 @@ function App() {
     </div>
   );
 
+  // Online Status Bar Component
+  const OnlineStatusBar = () => {
+      // Filter online users based on current user role
+      if (userProfile.role === 'teacher') {
+          // Show students
+          const onlineStudents = Object.values(onlineUsers).filter((u: any) => u.role === 'student');
+          if (onlineStudents.length === 0) return null;
+          
+          return (
+              <div className="fixed top-4 right-20 z-[60] bg-white/90 backdrop-blur shadow-sm border border-emerald-100 rounded-full px-4 py-1.5 flex items-center gap-2 text-xs font-bold text-slate-600 animate-fade-in">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span>Online: {onlineStudents.map((s: any) => s.name).join(', ')}</span>
+              </div>
+          );
+      } else if (userProfile.role === 'student') {
+          // Show if teacher is online
+          // Check if ANY teacher is online (simplified) or specific teacher if we knew ID
+          const teacherOnline = Object.values(onlineUsers).some((u: any) => u.role === 'teacher');
+          
+          return (
+              <div className={`fixed top-4 right-20 z-[60] backdrop-blur shadow-sm border rounded-full px-4 py-1.5 flex items-center gap-2 text-xs font-bold animate-fade-in ${teacherOnline ? 'bg-white/90 border-emerald-100 text-slate-600' : 'bg-slate-50/50 border-slate-200 text-slate-400'}`}>
+                  <span className={`w-2 h-2 rounded-full ${teacherOnline ? 'bg-emerald-500' : 'bg-slate-300'}`}></span>
+                  <span>Teacher is {teacherOnline ? 'Online' : 'Offline'}</span>
+              </div>
+          );
+      }
+      return null;
+  };
+
+  // Enhance students list with online status for modal
+  const trackedStudentsWithStatus = useMemo(() => {
+      return trackedStudents.map(student => ({
+          ...student,
+          isOnline: Object.values(onlineUsers).some((u: any) => u.id === student.id)
+      }));
+  }, [trackedStudents, onlineUsers]);
+
   const CategoryCard = ({ title, subtitle, count, onClick, colorClass, icon, delay, badge, stats }: any) => {
     let iconBgColor = 'bg-gray-100 text-gray-600';
     if (colorClass.includes('indigo')) iconBgColor = 'bg-indigo-100 text-indigo-600';
@@ -901,6 +986,7 @@ function App() {
 
       return (
       <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
+          <OnlineStatusBar />
           <div className="w-full md:w-80 bg-white border-r border-slate-200 flex flex-col h-screen sticky top-0">
               <div className="p-6 border-b border-slate-100">
                   <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
@@ -928,16 +1014,21 @@ function App() {
                   {trackedStudents.length === 0 ? (
                       <div className="p-6 text-center text-slate-400 text-sm">No students tracked.</div>
                   ) : (
-                      trackedStudents.map((student) => (
+                      trackedStudents.map((student) => {
+                          const isOnline = Object.values(onlineUsers).some((u: any) => u.id === student.id);
+                          return (
                           <div 
                               key={student.id}
                               onClick={() => handleSelectStudentForView(student)}
                               className={`p-4 border-b border-slate-50 cursor-pointer hover:bg-slate-50 transition-colors group relative ${selectedStudentForView?.id === student.id ? 'bg-indigo-50 border-indigo-100' : ''}`}
                           >
                               <div className="flex justify-between items-start">
-                                  <div>
-                                      <div className="font-bold text-slate-800">{student.name}</div>
-                                      <div className="text-xs text-slate-400">{student.email}</div>
+                                  <div className="flex items-center gap-2">
+                                      <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500' : 'bg-slate-200'}`}></div>
+                                      <div>
+                                          <div className="font-bold text-slate-800">{student.name}</div>
+                                          <div className="text-xs text-slate-400">{student.email}</div>
+                                      </div>
                                   </div>
                                   <div className="flex gap-2">
                                     <button onClick={(e) => { e.stopPropagation(); handleRemoveStudent(student.email); }} className="text-slate-300 hover:text-red-400">
@@ -952,7 +1043,7 @@ function App() {
                                   ) : null}
                               </div>
                           </div>
-                      ))
+                      )})
                   )}
               </div>
               <div className="p-4 border-t border-slate-100 flex flex-col gap-2">
@@ -976,7 +1067,14 @@ function App() {
                   <div className="max-w-4xl mx-auto">
                       <div className="flex items-center justify-between mb-8">
                           <div>
-                              <h1 className="text-3xl font-extrabold text-slate-900">{selectedStudentForView.name}</h1>
+                              <div className="flex items-center gap-3">
+                                <h1 className="text-3xl font-extrabold text-slate-900">{selectedStudentForView.name}</h1>
+                                {Object.values(onlineUsers).some((u:any) => u.id === selectedStudentForView.id) && (
+                                    <span className="bg-emerald-100 text-emerald-700 text-xs px-2 py-1 rounded-full font-bold flex items-center gap-1">
+                                        <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span> Online
+                                    </span>
+                                )}
+                              </div>
                               <p className="text-slate-500">{selectedStudentForView.email}</p>
                           </div>
                           <div className="flex gap-4">
@@ -1180,7 +1278,7 @@ function App() {
             isOpen={isHomeworkModalOpen} 
             studentName={studentToAssign?.name} 
             initialStudentId={studentToAssign?.id}
-            students={trackedStudents}
+            students={trackedStudentsWithStatus}
             preSelectedTask={quickAssignTask}
             onClose={() => setIsHomeworkModalOpen(false)}
             onAssign={handleAssignHomework}
@@ -1330,6 +1428,7 @@ function App() {
         backgroundImage: 'linear-gradient(#e2e8f0 1px, transparent 1px), linear-gradient(to right, #e2e8f0 1px, transparent 1px)',
         backgroundSize: '24px 24px'
     }}>
+      <OnlineStatusBar />
       <div className="absolute top-6 right-6 z-10 flex gap-4">
          {userProfile.role === 'teacher' && (
             <button
@@ -1492,7 +1591,7 @@ function App() {
             isOpen={isHomeworkModalOpen} 
             studentName={studentToAssign?.name} 
             initialStudentId={studentToAssign?.id}
-            students={trackedStudents}
+            students={trackedStudentsWithStatus}
             preSelectedTask={quickAssignTask}
             onClose={() => setIsHomeworkModalOpen(false)}
             onAssign={handleAssignHomework}

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { ExerciseType } from '../types';
 import { grammarStories } from '../data/grammar';
@@ -14,6 +15,7 @@ interface TrackedStudent {
     id: string;
     email: string;
     name: string;
+    isOnline?: boolean;
 }
 
 interface HomeworkModalProps {
@@ -136,7 +138,9 @@ const HomeworkModal: React.FC<HomeworkModalProps> = ({
                         onChange={(e) => setSelectedStudentId(e.target.value)}
                     >
                         {students.map(s => (
-                            <option key={s.id} value={s.id}>{s.name} ({s.email})</option>
+                            <option key={s.id} value={s.id}>
+                                {s.isOnline ? '🟢 ' : ''} {s.name} ({s.email})
+                            </option>
                         ))}
                     </select>
                 </div>
