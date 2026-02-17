@@ -199,7 +199,8 @@ function App() {
         if (!data.role) {
             setView(ViewState.ROLE_SELECTION);
         } else {
-            if (view === ViewState.REGISTRATION || view === ViewState.ROLE_SELECTION || view === ViewState.FORGOT_PASSWORD) {
+            // Allow navigating to Home unless we are in a special view
+            if (view !== ViewState.SETTINGS && view !== ViewState.TEACHER_DASHBOARD) {
                 setView(ViewState.HOME);
             }
             if (data.role === 'student') {
@@ -207,11 +208,14 @@ function App() {
             }
         }
       } else {
+        // No profile found, force role selection to create one
         setUserProfile({ id: userId, name: '', email: userEmail, teacherEmail: '' });
         setView(ViewState.ROLE_SELECTION);
       }
     } catch (e) {
-      console.error(e);
+      console.error("Critical profile load error:", e);
+      // Fallback
+      setView(ViewState.ROLE_SELECTION);
     }
   };
 
@@ -228,6 +232,8 @@ function App() {
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading) return;
+    
     setLoading(true);
     setAuthError(null);
     try {
@@ -240,7 +246,8 @@ function App() {
         
         // Explicitly load profile to ensure view updates before loading stops
         if (data.session) {
-            await loadUserProfile(data.session.user.id, data.session.user.email!);
+            const email = data.session.user.email || '';
+            await loadUserProfile(data.session.user.id, email);
         }
       } else {
         const { data, error } = await supabase.auth.signUp({
@@ -260,6 +267,7 @@ function App() {
         }
       }
     } catch (error: any) {
+      console.error("Auth Error:", error);
       setAuthError(getErrorMessage(error));
     } finally {
       setLoading(false);
