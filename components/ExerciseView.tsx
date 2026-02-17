@@ -60,14 +60,14 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   useEffect(() => {
     // Only broadcast if user is a student and has a profile
     if (userProfile?.role === 'student' && userProfile.id) {
-        const channelName = `live_session_${userProfile.id}`;
-        const channel = supabase.channel(channelName);
+        // ✅ Using shared channel for efficiency
+        const channel = supabase.channel('live_sessions_all');
         
         channel.subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
                 await channel.send({
                     type: 'broadcast',
-                    event: 'session_started',
+                    event: `student_${userProfile.id}_started`,
                     payload: {
                         studentId: userProfile.id,
                         studentName: userProfile.name,
@@ -83,10 +83,9 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
 
         return () => {
             if (broadcastChannelRef.current) {
-                // Best effort to send end event
                 broadcastChannelRef.current.send({
                     type: 'broadcast',
-                    event: 'session_ended',
+                    event: `student_${userProfile.id}_ended`,
                     payload: { studentId: userProfile.id, endedAt: new Date().toISOString() }
                 });
                 supabase.removeChannel(broadcastChannelRef.current);
@@ -101,18 +100,16 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       const now = Date.now();
       // Simple throttle: max 1 event per 300ms to avoid flooding, but frequent enough for live feel
       if (now - lastBroadcastRef.current > 300) {
-          // Calculate roughly progress
-          const totalQuestions = Object.keys(allInputs).length > 0 ? Object.keys(allInputs).length : 1; 
           const progressPercentage = Math.min(100, Math.round((Object.keys(allInputs).length / 10) * 10)); 
 
           broadcastChannelRef.current.send({
               type: 'broadcast',
-              event: 'typing',
+              event: `student_${userProfile.id}_typing`,
               payload: {
                   studentId: userProfile.id,
                   questionId,
-                  input: currentInput, // Current active input
-                  allAnswers: allInputs, // ALL inputs to render full state
+                  input: currentInput, 
+                  allAnswers: allInputs, 
                   isCorrect,
                   timestamp: now,
                   progressPercentage
@@ -178,7 +175,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   const handleSeek = (seconds: number) => {
       if (!stickyAudioRef.current) return;
       const newTime = stickyAudioRef.current.currentTime + seconds;
-      // Clamp between 0 and duration
       stickyAudioRef.current.currentTime = Math.max(0, Math.min(newTime, stickyAudioRef.current.duration || Infinity));
   };
 
@@ -210,8 +206,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   const toggleTranscript = (index: number) => {
       setShowTranscript(prev => ({ ...prev, [index]: !prev[index] }));
   };
-
-  // --- Speaking Logic ---
 
   const startReadAloudPreparation = () => {
     setSpeakingPhase('PREPARING');
@@ -262,9 +256,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       }
   };
 
-  // Simplified toggle logic for Interview Mode
   const toggleInterviewRecording = async () => {
-      // Initial Setup if recorder doesn't exist
       if (!mediaRecorderRef.current) {
           try {
               const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -280,16 +272,13 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                   }
               };
 
-              // CRITICAL FIX: Upload ONLY when stop() is called and 'onstop' fires.
               mediaRecorder.onstop = () => {
                   stream.getTracks().forEach(track => track.stop());
                   handleAudioUpload();
               };
 
-              // Start recording immediately
               mediaRecorder.start();
               setIsMicActive(true);
-              // setSpeakingPhase('RECORDING'); // We don't strictly need to change phase for UI if we remove the IDLE screen
           } catch (err) {
               console.error("Microphone access error", err);
               alert("Could not access microphone. Please allow permissions.");
@@ -297,7 +286,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
           return;
       }
 
-      // Resume/Pause Logic
       if (mediaRecorderRef.current.state === 'recording') {
           mediaRecorderRef.current.pause();
           setIsMicActive(false);
@@ -309,14 +297,9 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
 
   const handleFinishInterview = () => {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-          // This calls .stop(), which triggers 'onstop', which calls handleAudioUpload.
           mediaRecorderRef.current.stop(); 
-          
-          if (audioRef.current) {
-              audioRef.current.pause();
-          }
+          if (audioRef.current) audioRef.current.pause();
       } else if (audioChunksRef.current.length > 0) {
-          // Fallback if somehow already stopped but not uploaded
           handleAudioUpload();
       } else {
           alert("No recording found to save.");
@@ -359,8 +342,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
           } catch (e: any) {
               console.error("Upload error", e);
           }
-      } else {
-          console.warn("Audio blob size is 0");
       }
 
       const taskLabel = story.speakingType === 'monologue' 
@@ -415,12 +396,10 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
     onComplete(10, 10, [{ question: story.title, userAnswer: "Audio Recorded (Simulated)", correctAnswer: "Teacher Review", isCorrect: true }]);
   };
 
-  // --- Input Logic ---
-  
   const handleInputChange = (key: string, value: string) => {
     const newInputs = { ...inputs, [key]: value };
     setInputs(newInputs);
-    broadcastTyping(key, value, newInputs, null); // Pass full inputs
+    broadcastTyping(key, value, newInputs, null);
     if (validation[key] !== undefined) {
       setValidation(prev => {
         const next = { ...prev };
@@ -549,8 +528,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
     setScore(correctCount);
     setValidation(newValidation);
     setShowResults(true);
-    
-    // Only call onComplete if we are checking everything at the end
     onComplete(correctCount, maxScore, attemptDetails);
   };
 
@@ -558,9 +535,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       const subStory = story.subStories![index];
       const prefix = `section_${index}_`;
       const newValidation = { ...validation };
-      let sectionCorrect = 0;
 
-      // Logic copied/adapted from checkStory
       if (subStory.texts && subStory.readingAnswers) {
           subStory.texts.forEach((text) => {
               const key = prefix + text.letter;
@@ -569,7 +544,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
               const userNum = parseInt(userChoice || "-1");
               const isCorrect = correctAnswers.includes(userNum);
               newValidation[key] = isCorrect;
-              if (isCorrect) sectionCorrect++;
           });
       } else if (subStory.questions) {
           subStory.questions.forEach(q => {
@@ -577,7 +551,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
               const userVal = parseInt(inputs[key] || "0");
               const isCorrect = userVal === q.answer;
               newValidation[key] = isCorrect;
-              if(isCorrect) sectionCorrect++;
           });
       } else if (subStory.tasks) {
           subStory.tasks.forEach((task, idx) => {
@@ -586,14 +559,11 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
               const correctVal = task.answer;
               const isCorrect = userVal.toLowerCase() === correctVal.toLowerCase();
               newValidation[key] = isCorrect;
-              if(isCorrect) sectionCorrect++;
           });
       }
 
       setValidation(newValidation);
       setCheckedSections(prev => ({ ...prev, [index]: true }));
-      
-      // Recalculate total score based on all validations
       const totalCorrect = Object.values(newValidation).filter(v => v === true).length;
       setScore(totalCorrect);
   };
@@ -618,8 +588,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
     setExplanations(prev => ({ ...prev, [key]: explanation }));
     setLoadingExplanation(null);
   };
-
-  // --- Rendering Sub-Components ---
 
   const renderWritingLayout = () => {
       return (
@@ -725,7 +693,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       if (subtype === 'interview') {
           return (
               <div className="max-w-3xl mx-auto py-10">
-                  {/* Exposed Audio Player so user can listen to the question */}
                   {story.audioUrl && (
                       <div className="mb-8 p-4 bg-slate-50 rounded-2xl border border-slate-200">
                           <p className="text-sm font-bold text-slate-500 mb-2 uppercase tracking-wider">Audio Question</p>
@@ -743,14 +710,12 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                           <div className="animate-pulse py-10 text-slate-500 font-bold">Saving...</div>
                       ) : (
                           <div className="flex flex-col items-center justify-center gap-6 w-full">
-                              {/* Status Pill */}
                               {isMicActive && (
                                 <div className="animate-pulse bg-rose-50 text-rose-600 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border border-rose-100 shadow-sm">
                                     ИДЕТ ЗАПИСЬ
                                 </div>
                               )}
 
-                              {/* Main Control Button */}
                               <button 
                                 onClick={toggleInterviewRecording} 
                                 className={`w-32 h-32 rounded-full flex flex-col items-center justify-center border-[6px] transition-all duration-300 shadow-xl hover:scale-105 active:scale-95 ${
@@ -772,7 +737,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                   )}
                               </button>
 
-                              {/* Finish Button */}
                               {audioChunksRef.current.length > 0 && !isMicActive && (
                                   <button onClick={handleFinishInterview} className="text-slate-400 hover:text-slate-600 text-sm font-bold underline mt-4">
                                       Finish & Save
@@ -823,8 +787,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       return null;
   }
 
-  // --- Listening Specific Logic ---
-
   const renderSingleListeningTask = (subStory: Story, index: number) => {
       const prefix = `section_${index}_`;
       const isSectionChecked = checkedSections[index] || showResults;
@@ -839,7 +801,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                   </div>
               </div>
 
-              {/* Transcript Section */}
               {subStory.transcript && (
                   <div className="mb-8">
                       <button 
@@ -859,11 +820,10 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                               Part {item.text_id}
                                           </div>
                                           {item.segments.map((seg, sIdx) => {
-                                              // Check if this segment is currently active
                                               const isActive = currentAudioTime >= seg.time && 
                                                   (sIdx < item.segments.length - 1 
                                                       ? currentAudioTime < item.segments[sIdx+1].time 
-                                                      : currentAudioTime < item.end); // Last segment goes until item end
+                                                      : currentAudioTime < item.end);
 
                                               return (
                                                   <div 
@@ -878,7 +838,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                                       <span className="text-xs text-slate-400 font-mono mr-2 select-none">
                                                           {formatAudioTime(seg.time)}
                                                       </span>
-                                                      <span className={isActive ? '' : ''}>{seg.text}</span>
+                                                      <span>{seg.text}</span>
                                                   </div>
                                               );
                                           })}
@@ -890,7 +850,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                   </div>
               )}
 
-              {/* 1. Multiple Choice */}
               {subStory.questions && (
                   <div className="grid gap-6">
                       {subStory.questions.map((q) => {
@@ -937,7 +896,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                   </div>
               )}
 
-              {/* 2. Matching */}
               {subStory.texts && subStory.readingAnswers && (
                   <div className="flex flex-col lg:flex-row gap-8">
                       <div className="lg:w-1/2">
@@ -956,7 +914,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                           {subStory.texts.map((speakerItem) => {
                               const key = prefix + speakerItem.letter;
                               const correctAnswers = subStory.readingAnswers![speakerItem.letter];
-                              const isCorrect = validation[key];
 
                               return (
                                   <div key={speakerItem.letter} className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
@@ -1003,7 +960,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                   </div>
               )}
 
-              {/* 3. Table Completion */}
               {subStory.tasks && (
                   <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
                       <table className="w-full text-left">
@@ -1046,7 +1002,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                   </div>
               )}
 
-              {/* Per-section Check Button */}
               <div className="mt-6 flex justify-end">
                   {!isSectionChecked && (
                       <button 
@@ -1069,7 +1024,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   const renderListening = () => {
       return (
           <div className="flex flex-col gap-4 max-w-5xl mx-auto pb-40 relative">
-              {/* Sticky Player */}
               {listeningAudioUrl && (
                 <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-200 shadow-2xl p-4 z-50">
                     <div className="max-w-4xl mx-auto flex flex-col md:flex-row items-center gap-6 relative">
@@ -1081,9 +1035,9 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                         
                         <audio 
                             ref={stickyAudioRef} 
-                            key={listeningAudioUrl} // Force remount on URL change
+                            key={listeningAudioUrl} 
                             src={listeningAudioUrl}
-                            crossOrigin="anonymous" // Good practice
+                            crossOrigin="anonymous" 
                             onTimeUpdate={handleTimeUpdate}
                             onEnded={() => setIsAudioPlaying(false)}
                             onLoadedMetadata={handleTimeUpdate}
@@ -1091,35 +1045,25 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                 const error = e.currentTarget.error;
                                 let errorMsg = "Error playing audio.";
                                 if (error) {
-                                    if (error.code === 1) errorMsg = "Playback aborted.";
                                     if (error.code === 2) errorMsg = "Network error. Check connection.";
                                     if (error.code === 3) errorMsg = "Audio decoding failed.";
                                     if (error.code === 4) errorMsg = "Audio source not supported or not found (404).";
-                                    console.error(`Audio Error Code: ${error.code}, Message: ${error.message}`);
-                                } else {
-                                    console.error("Unknown Audio Error", e);
                                 }
                                 setAudioError(errorMsg);
                                 setIsAudioPlaying(false);
                             }}
-                            preload="auto" // Changed from metadata to auto to ensure it tries to verify source
+                            preload="auto"
                         />
                         
-                        {/* Audio Controls */}
                         <div className="flex items-center gap-4 md:gap-6 order-2 md:order-1">
-                            {/* Seek -15s */}
                             <button onClick={() => handleSeek(-15)} className="p-2 rounded-full hover:bg-slate-100 text-slate-500 font-bold text-xs flex flex-col items-center gap-1 transition-colors">
                                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
                                 -15s
                             </button>
-
-                            {/* Seek -5s */}
                             <button onClick={() => handleSeek(-5)} className="p-2 rounded-full hover:bg-slate-100 text-slate-500 font-bold text-xs flex flex-col items-center gap-1 transition-colors">
                                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
                                 -5s
                             </button>
-
-                            {/* Play / Pause */}
                             <button onClick={handlePlayPause} className="w-16 h-16 rounded-full bg-slate-900 hover:bg-indigo-600 text-white flex items-center justify-center hover:scale-105 transition-all shadow-lg shrink-0">
                                 {isAudioPlaying ? (
                                     <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M10 9v6m4-6v6" /></svg>
@@ -1127,21 +1071,16 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                     <svg className="w-8 h-8 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /></svg>
                                 )}
                             </button>
-
-                            {/* Seek +5s */}
                             <button onClick={() => handleSeek(5)} className="p-2 rounded-full hover:bg-slate-100 text-slate-500 font-bold text-xs flex flex-col items-center gap-1 transition-colors">
                                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                                 +5s
                             </button>
-
-                            {/* Seek +15s */}
                             <button onClick={() => handleSeek(15)} className="p-2 rounded-full hover:bg-slate-100 text-slate-500 font-bold text-xs flex flex-col items-center gap-1 transition-colors">
                                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
                                 +15s
                             </button>
                         </div>
 
-                        {/* Progress Bar & Time */}
                         <div className="flex-1 w-full order-1 md:order-2 px-2">
                             <div className="flex justify-between text-xs font-bold text-slate-400 mb-2">
                                 <span>{formatAudioTime(currentAudioTime)}</span>
@@ -1158,8 +1097,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                     </div>
                 </div>
               )}
-              
-              {/* Render all sub-stories (Tasks) */}
               {story.subStories ? story.subStories.map((sub, idx) => renderSingleListeningTask(sub, idx)) : renderSingleListeningTask(story, 0)}
           </div>
       );
@@ -1283,7 +1220,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
               </div>
               <div className="lg:w-1/2 flex flex-col gap-4 overflow-y-auto custom-scrollbar pb-10">
                   {story.questions?.map((q) => {
-                      const isCorrect = validation[q.id.toString()];
                       return (
                           <div key={q.id} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
                               <div className="flex gap-4 mb-4">

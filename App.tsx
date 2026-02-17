@@ -94,8 +94,7 @@ export default function App() {
   const [completedStories, setCompletedStories] = useState<Set<string>>(new Set());
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [selectedType, setSelectedType] = useState<ExerciseType>(ExerciseType.GRAMMAR);
-  // Track where the user came from to handle "Back" button correctly
-  const [exerciseSource, setExerciseSource] = useState<'CATALOG' | 'HOMEWORK'>('CATALOG');
+  const [exerciseSource, setExerciseSource] = useState<'CATALOG' | 'HOMEWORK'>( 'CATALOG');
   
   // Auth state
   const [email, setEmail] = useState('');
@@ -122,24 +121,26 @@ export default function App() {
   // New Teacher Dashboard State
   const [dashboardTab, setDashboardTab] = useState<'LIVE_VIEW' | 'STUDENTS' | 'HOMEWORK' | 'ANALYTICS'>('STUDENTS');
   const [liveStudents, setLiveStudents] = useState<Record<string, LiveSession>>({});
-  // NEW: State for Fullscreen Live View
   const [expandedStudentId, setExpandedStudentId] = useState<string | null>(null);
 
-  const [checkedHomework, setCheckedHomework] = useState<any[]>([]); // List of all completed homework for teacher
-  const [selectedStudentForAssignment, setSelectedStudentForAssignment] = useState<TrackedStudent | null>(null); // For assignment flow
+  const [checkedHomework, setCheckedHomework] = useState<any[]>([]); 
+  const [selectedStudentForAssignment, setSelectedStudentForAssignment] = useState<TrackedStudent | null>(null); 
 
   // Live Session State (Teacher)
   const [liveSessionActive, setLiveSessionActive] = useState(false);
   const [liveSessionCode, setLiveSessionCode] = useState<string | null>(null);
-  const [sessionParticipants, setSessionParticipants] = useState<string[]>([]); // Student IDs
+  const [sessionParticipants, setSessionParticipants] = useState<string[]>([]); 
   const [currentPushedExercise, setCurrentPushedExercise] = useState<{title: string, type: ExerciseType} | null>(null);
   const [liveSessionPushTab, setLiveSessionPushTab] = useState<ExerciseType>(ExerciseType.GRAMMAR);
+  const sessionChannelRef = useRef<any>(null); // For participant DB changes
+  const liveSessionBroadcastRef = useRef<any>(null); // For pushing exercises (Teacher)
 
   // Live Session State (Student)
   const [joinedSessionCode, setJoinedSessionCode] = useState<string | null>(null);
   const [joinSessionInput, setJoinSessionInput] = useState('');
   const [incomingExercise, setIncomingExercise] = useState<{title: string, type: ExerciseType} | null>(null);
   const [showExercisePushModal, setShowExercisePushModal] = useState(false);
+  const liveSessionChannelRef = useRef<any>(null); // For listening to exercises (Student)
 
   // Presence State
   const [onlineUsers, setOnlineUsers] = useState<Record<string, any>>({});
@@ -164,7 +165,6 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Initial check
     checkSession();
     
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event: AuthChangeEvent, session: Session | null) => {
@@ -176,10 +176,7 @@ export default function App() {
         }
       }
       
-      // On SIGNED_IN, we might be already handling it in handleAuth, 
-      // but this acts as a backup for session restoration.
       if (event === 'SIGNED_IN' && session) {
-          // Do not await here to avoid blocking UI if this triggers unexpectedly
           loadUserProfile(session.user.id, session.user.email!).catch(console.error);
       }
       
@@ -191,6 +188,15 @@ export default function App() {
 
     return () => {
       authListener.subscription.unsubscribe();
+      if (sessionChannelRef.current) {
+        supabase.removeChannel(sessionChannelRef.current);
+      }
+      if (liveSessionChannelRef.current) {
+        supabase.removeChannel(liveSessionChannelRef.current);
+      }
+      if (liveSessionBroadcastRef.current) {
+        supabase.removeChannel(liveSessionBroadcastRef.current);
+      }
     };
   }, []);
 
@@ -206,7 +212,6 @@ export default function App() {
                 const state = channel.presenceState();
                 const users: Record<string, any> = {};
                 
-                // Flatten state
                 Object.values(state).forEach((presences: any) => {
                     presences.forEach((p: any) => {
                         users[p.id] = p;
@@ -258,23 +263,22 @@ export default function App() {
     };
   }, [userProfile.role, userProfile.id]);
 
-  // Live View Subscription for Teachers
+  // Optimized Live View Subscription for Teachers (Single Channel)
   useEffect(() => {
     if (userProfile.role !== 'teacher' || trackedStudents.length === 0) return;
     
-    // Create subscriptions for each tracked student
-    const channels = trackedStudents.map(student => {
-      const channel = supabase.channel(`live_session_${student.id}`);
-      
+    const channel = supabase.channel('live_sessions_all');
+    
+    trackedStudents.forEach(student => {
       channel
-        .on('broadcast', { event: 'session_started' }, (payload) => {
+        .on('broadcast', { event: `student_${student.id}_started` }, (payload) => {
           setLiveStudents(prev => ({
             ...prev,
-            [payload.payload.studentId]: {
+            [student.id]: {
               ...payload.payload,
               currentQuestion: '',
               userInput: '',
-              allAnswers: {}, // Initialize empty
+              allAnswers: {}, 
               isCorrect: null,
               progressPercentage: 0,
               lastActivity: Date.now()
@@ -282,30 +286,29 @@ export default function App() {
           }));
           showToast(`${payload.payload.studentName} started working`, 'info');
         })
-        .on('broadcast', { event: 'typing' }, (payload) => {
+        .on('broadcast', { event: `student_${student.id}_typing` }, (payload) => {
           setLiveStudents(prev => ({
             ...prev,
-            [payload.payload.studentId]: {
-              ...prev[payload.payload.studentId],
-              ...payload.payload, // Updates questionId, input, allAnswers, isCorrect, progress
+            [student.id]: {
+              ...prev[student.id],
+              ...payload.payload, 
               lastActivity: payload.payload.timestamp
             }
           }));
         })
-        .on('broadcast', { event: 'session_ended' }, (payload) => {
+        .on('broadcast', { event: `student_${student.id}_ended` }, (payload) => {
           setLiveStudents(prev => {
             const updated = { ...prev };
-            delete updated[payload.payload.studentId];
+            delete updated[student.id];
             return updated;
           });
-        })
-        .subscribe();
-      
-      return channel;
+        });
     });
+
+    channel.subscribe();
     
     return () => {
-      channels.forEach(ch => supabase.removeChannel(ch));
+      supabase.removeChannel(channel);
     };
   }, [userProfile.role, trackedStudents]);
 
@@ -339,7 +342,6 @@ export default function App() {
           if (error) throw error;
           
           if (data) {
-              // Map profile data to flatten structure if needed, or use as is
               const formatted = data.map((hw: any) => ({
                   ...hw,
                   studentName: hw.profiles?.full_name || 'Unknown',
@@ -352,7 +354,6 @@ export default function App() {
       }
   };
 
-  // Fetch checked homework when tab changes to HOMEWORK
   useEffect(() => {
       if (dashboardTab === 'HOMEWORK' && userProfile.role === 'teacher') {
           fetchAllCheckedHomework();
@@ -362,19 +363,42 @@ export default function App() {
   // LIVE SESSION FUNCTIONS (TEACHER)
   const startLiveSession = async (sessionTitle: string) => {
     if (!userProfile.id) return;
+    
+    const { data: existingSession } = await supabase
+      .from('live_classroom_sessions')
+      .select('*')
+      .eq('teacher_id', userProfile.id)
+      .eq('status', 'active')
+      .maybeSingle();
+    
+    if (existingSession) {
+      setLiveSessionCode(existingSession.session_code);
+      setLiveSessionActive(true);
+      
+      if (liveSessionBroadcastRef.current) {
+          supabase.removeChannel(liveSessionBroadcastRef.current);
+      }
+      
+      const broadcastChannel = supabase.channel(`session_${existingSession.session_code}`);
+      liveSessionBroadcastRef.current = broadcastChannel;
+      await broadcastChannel.subscribe(); // ✅ Subscribe is mandatory
+
+      showToast(`Reconnected to session: ${existingSession.session_code}`, "success");
+      subscribeToSessionParticipants(existingSession.id);
+      return;
+    }
+    
     setLoading(true);
-    // Generate unique 6-character code
     const code = Math.random().toString(36).substring(2, 8).toUpperCase();
     
     try {
-      // Note: Assuming 'live_classroom_sessions' table exists as per instruction
       const { data, error } = await supabase
         .from('live_classroom_sessions')
         .insert({
           teacher_id: userProfile.id,
           session_code: code,
           title: sessionTitle,
-          status: 'active' // Active immediately
+          status: 'active' 
         })
         .select()
         .single();
@@ -383,13 +407,19 @@ export default function App() {
       
       setLiveSessionCode(code);
       setLiveSessionActive(true);
-      showToast(`Live session started! Code: ${code}`, "success");
       
-      // Subscribe to participant joins
+      if (liveSessionBroadcastRef.current) {
+          supabase.removeChannel(liveSessionBroadcastRef.current);
+      }
+
+      const broadcastChannel = supabase.channel(`session_${code}`);
+      liveSessionBroadcastRef.current = broadcastChannel;
+      await broadcastChannel.subscribe(); // ✅ Subscribe is mandatory
+
+      showToast(`Live session started! Code: ${code}`, "success");
       subscribeToSessionParticipants(data.id);
       
     } catch (err: any) {
-       // Graceful degradation if table doesn't exist yet
        if (err.code === '42P01') {
            showToast("Database not setup for Live Sessions. Run SQL script.", "error");
        } else {
@@ -403,6 +433,14 @@ export default function App() {
   const endLiveSession = async () => {
       if (!liveSessionCode) return;
       try {
+          if (liveSessionBroadcastRef.current) {
+              await liveSessionBroadcastRef.current.send({
+                type: 'broadcast',
+                event: 'session_ended',
+                payload: {}
+              });
+          }
+
           await supabase
             .from('live_classroom_sessions')
             .update({ status: 'ended', ended_at: new Date().toISOString() })
@@ -412,6 +450,12 @@ export default function App() {
           setLiveSessionCode(null);
           setSessionParticipants([]);
           setCurrentPushedExercise(null);
+          
+          if (liveSessionBroadcastRef.current) {
+              supabase.removeChannel(liveSessionBroadcastRef.current);
+              liveSessionBroadcastRef.current = null;
+          }
+
           showToast("Session ended", "info");
       } catch (err) {
           console.error(err);
@@ -419,13 +463,17 @@ export default function App() {
   };
 
   const subscribeToSessionParticipants = (sessionId: string) => {
+    if (sessionChannelRef.current) {
+      supabase.removeChannel(sessionChannelRef.current);
+    }
+    
     const channel = supabase.channel(`session_${sessionId}_participants`);
+    sessionChannelRef.current = channel;
     
     channel
       .on('postgres_changes', 
         { event: '*', schema: 'public', table: 'session_participants', filter: `session_id=eq.${sessionId}` },
         async () => {
-          // Refresh participant list
           const { data } = await supabase
             .from('session_participants')
             .select('student_id, profiles!student_id(full_name)')
@@ -441,25 +489,21 @@ export default function App() {
   };
 
   const pushExerciseToStudents = async (exerciseTitle: string, exerciseType: ExerciseType) => {
-    if (!liveSessionCode) {
-      showToast("No active session", "error");
+    if (!liveSessionCode || !liveSessionBroadcastRef.current) {
+      showToast("Session not properly initialized", "error");
       return;
     }
     
     try {
-      // Update session with current exercise
       await supabase
         .from('live_classroom_sessions')
         .update({
           current_exercise_title: exerciseTitle,
           current_exercise_type: exerciseType,
-          status: 'active'
         })
         .eq('session_code', liveSessionCode);
       
-      // Broadcast to all students via Supabase Realtime
-      const channel = supabase.channel(`session_${liveSessionCode}`);
-      await channel.send({
+      await liveSessionBroadcastRef.current.send({
         type: 'broadcast',
         event: 'exercise_pushed',
         payload: {
@@ -478,14 +522,11 @@ export default function App() {
     }
   };
 
-  // LIVE SESSION FUNCTIONS (STUDENT)
   const joinLiveSession = async (codeStr: string) => {
-    if (!userProfile.id) return;
-    if (!codeStr) return;
+    if (!userProfile.id || !codeStr) return;
     setLoading(true);
     
     try {
-      // Verify session exists and is active
       const { data: session, error: sessionError } = await supabase
         .from('live_classroom_sessions')
         .select('*')
@@ -498,8 +539,23 @@ export default function App() {
         setLoading(false);
         return;
       }
+
+      // ✅ Check for existing join record
+      const { data: existing } = await supabase
+        .from('session_participants')
+        .select('id')
+        .eq('session_id', session.id)
+        .eq('student_id', userProfile.id)
+        .maybeSingle();
       
-      // Add student to participants
+      if (existing) {
+        setJoinedSessionCode(codeStr.toUpperCase());
+        subscribeToExercisePushes(codeStr.toUpperCase());
+        showToast("Reconnected to session", "info");
+        setLoading(false);
+        return;
+      }
+      
       await supabase
         .from('session_participants')
         .insert({
@@ -511,7 +567,6 @@ export default function App() {
       setJoinedSessionCode(codeStr.toUpperCase());
       showToast(`Joined session: ${session.title}`, "success");
       
-      // Subscribe to exercise pushes
       subscribeToExercisePushes(codeStr.toUpperCase());
       
     } catch (err: any) {
@@ -526,19 +581,29 @@ export default function App() {
   };
 
   const subscribeToExercisePushes = (sessionCode: string) => {
+    if (liveSessionChannelRef.current) {
+      supabase.removeChannel(liveSessionChannelRef.current);
+    }
+    
     const channel = supabase.channel(`session_${sessionCode}`);
+    liveSessionChannelRef.current = channel;
     
     channel
       .on('broadcast', { event: 'exercise_pushed' }, (payload) => {
-        // Show notification and open exercise
         setIncomingExercise({
           title: payload.payload.exerciseTitle,
           type: payload.payload.exerciseType
         });
         setShowExercisePushModal(true);
-        
-        // Auto-open exercise after 3 seconds if not dismissed
-        // But for better UX, let's just rely on the modal or immediate switch
+      })
+      .on('broadcast', { event: 'session_ended' }, () => {
+        showToast("Session ended by teacher", "info");
+        setJoinedSessionCode(null);
+        setIncomingExercise(null);
+        if (liveSessionChannelRef.current) {
+            supabase.removeChannel(liveSessionChannelRef.current);
+            liveSessionChannelRef.current = null;
+        }
       })
       .subscribe();
   };
@@ -546,7 +611,6 @@ export default function App() {
   const handleAcceptPushedExercise = () => {
     if (!incomingExercise) return;
     
-    // Find the exercise in the catalog
     const exercise = allStories.find(s => 
       s.title === incomingExercise.title && 
       s.type === incomingExercise.type
@@ -554,30 +618,37 @@ export default function App() {
     
     if (exercise) {
       startExercise(exercise, incomingExercise.type, 'CATALOG');
-      setShowExercisePushModal(false);
     } else {
         showToast("Exercise not found locally", "error");
     }
+    
+    // ✅ Always close and clear
+    setShowExercisePushModal(false);
+    setIncomingExercise(null);
   };
 
-  // Effect to auto-accept for seamless experience (optional, but requested "immediately opens")
   useEffect(() => {
-      if (showExercisePushModal && incomingExercise) {
-          const timer = setTimeout(() => {
-              handleAcceptPushedExercise();
-          }, 1500); // Small delay to let user see "Incoming..."
-          return () => clearTimeout(timer);
-      }
+    let isMounted = true;
+    
+    if (showExercisePushModal && incomingExercise) {
+      const timer = setTimeout(() => {
+        if (isMounted) { 
+          handleAcceptPushedExercise();
+        }
+      }, 1500);
+      
+      return () => {
+        isMounted = false;
+        clearTimeout(timer);
+      };
+    }
   }, [showExercisePushModal, incomingExercise]);
 
 
   const checkSession = async () => {
-    // Silent check, don't show global loading
     const { data: { session } } = await supabase.auth.getSession();
     if (session) {
       await loadUserProfile(session.user.id, session.user.email!);
-    } else {
-      // Stay on Registration view
     }
   };
 
@@ -590,7 +661,6 @@ export default function App() {
         .single();
 
       if (error && error.code !== 'PGRST116') {
-         // If table not found, just log and continue to let user in (fallback mode)
          if (error.code === '42P01') {
              console.warn("Profiles table missing. Running in limited mode.");
          } else {
@@ -609,7 +679,6 @@ export default function App() {
         });
         setCompletedStories(new Set(data.completed_stories || []));
         
-        // Navigation Logic
         if (!data.role) {
             setView(ViewState.ROLE_SELECTION);
         } else {
@@ -621,13 +690,11 @@ export default function App() {
             }
         }
       } else {
-        // No profile found in DB, temporary profile state
         setUserProfile({ id: userId, name: '', email: userEmail, teacherEmail: '' });
         setView(ViewState.ROLE_SELECTION);
       }
     } catch (e) {
       console.error("Critical profile load error:", e);
-      // Fail-safe: allow user to retry or see role selection
       setView(ViewState.ROLE_SELECTION);
     }
   };
@@ -666,8 +733,10 @@ export default function App() {
     try {
       let result;
       if (isLoginMode) {
+        // ✅ Supabase methods are under .auth namespace
         result = await supabase.auth.signInWithPassword({ email, password });
       } else {
+        // ✅ Supabase methods are under .auth namespace
         result = await supabase.auth.signUp({ email, password });
       }
 
@@ -675,7 +744,6 @@ export default function App() {
 
       if (result.data.session) {
           const session = result.data.session;
-          // Fail-safe: Use Promise.race to prevent hanging if DB is slow
           try {
               await Promise.race([
                   loadUserProfile(session.user.id, session.user.email!),
@@ -683,7 +751,6 @@ export default function App() {
               ]);
           } catch (timeoutErr) {
               console.warn("Profile load timed out, proceeding to fallback.");
-              // Force entry if timeout happens
               setView(ViewState.ROLE_SELECTION);
               setUserProfile({ 
                   id: session.user.id, 
@@ -700,7 +767,6 @@ export default function App() {
       console.error("Auth Error:", error);
       setAuthError(getErrorMessage(error));
     } finally {
-      // Must ensure loading is turned off
       setLoading(false);
     }
   };
@@ -708,7 +774,6 @@ export default function App() {
   const handleAssignHomework = async (targetStudentId: string, exercises: { title: string; type: ExerciseType }[], dueDate: string, instructions: string) => {
     if (!targetStudentId || !userProfile.id) {
         showToast("Error: Missing student or teacher ID. Try refreshing.", "error");
-        console.error("Assignment Failed. StudentID:", targetStudentId, "TeacherID:", userProfile.id);
         return;
     }
     
@@ -725,7 +790,6 @@ export default function App() {
         instructions: instructions
       }));
 
-      // Batch insert for efficiency ("EdTech standard")
       const { error } = await supabase
         .from('homework_assignments')
         .insert(assignments);
@@ -735,10 +799,8 @@ export default function App() {
       showToast(`Successfully assigned ${exercises.length} tasks!`, "success");
       setIsHomeworkModalOpen(false); 
       setQuickAssignTask(undefined);
-      // Clear assignment mode if we were in it
       setSelectedStudentForAssignment(null);
       
-      // Refresh data in background
       await fetchStudentHomework(targetStudentId);
       refreshStudentStats(trackedStudents); 
 
@@ -750,8 +812,6 @@ export default function App() {
     }
   };
 
-  // Other Helper Functions ... 
-  
   const handlePasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -816,12 +876,11 @@ export default function App() {
           
           if (error || !profile) return null;
 
-          // Check if homework table exists before querying
           const { count, error: countError } = await supabase
             .from('homework_assignments')
             .select('*', { count: 'exact', head: true })
             .eq('student_id', profile.id)
-            .eq('teacher_id', userProfile.id) // Only count tasks assigned by THIS teacher
+            .eq('teacher_id', userProfile.id) 
             .eq('status', 'pending');
 
           if (countError && countError.code === '42P01') {
@@ -924,9 +983,8 @@ export default function App() {
 
   const startAssignmentFlow = (student: TrackedStudent) => {
       setSelectedStudentForAssignment(student);
-      // Fetch this student's homework to color code buttons
       fetchStudentHomework(student.id);
-      setView(ViewState.HOME); // Go to main catalog
+      setView(ViewState.HOME); 
       showToast(`Assigning to ${student.name}. Select exercises.`, "info");
   };
 
@@ -935,16 +993,14 @@ export default function App() {
           showToast("Select a student from the dashboard first.", "error");
           return;
       }
-      // Re-use the main assignment function for consistency
       const exercises = [{ title: storyTitle, type: exerciseType }];
-      // Default 7 days
       const defaultDate = new Date();
       defaultDate.setDate(defaultDate.getDate() + 7);
       
       await handleAssignHomework(
           selectedStudentForAssignment.id,
           exercises,
-          defaultDate.toISOString().split('T')[0], // YYYY-MM-DD
+          defaultDate.toISOString().split('T')[0], 
           "Quick assigned task"
       );
   };
@@ -1029,7 +1085,6 @@ export default function App() {
                 details: details
             });
             
-            // Check for homework completion
             const assignment = myHomework.find(h => 
                 h.exercise_title === title && 
                 h.exercise_type === selectedType && 
@@ -1063,7 +1118,6 @@ export default function App() {
     }
   };
 
-  // Tracking source for navigation
   const startExercise = (story: Story, type: ExerciseType, source: 'CATALOG' | 'HOMEWORK' = 'CATALOG') => {
     setSelectedStory(story);
     setSelectedType(type);
@@ -1077,12 +1131,10 @@ export default function App() {
   };
 
   const getBackView = () => {
-    // If we came from homework, go back to homework list
     if (exerciseSource === 'HOMEWORK') {
         return ViewState.HOMEWORK_LIST;
     }
 
-    // Otherwise standard behavior
     switch (selectedType) {
       case ExerciseType.GRAMMAR: return ViewState.GRAMMAR_LIST;
       case ExerciseType.VOCABULARY: return ViewState.VOCAB_LIST;
@@ -1107,12 +1159,10 @@ export default function App() {
     setAuthSuccessMsg(null);
   };
 
-  // Stats for the hero section
   const totalCompleted = completedStories.size;
   const progressPercentage = Math.round((totalCompleted / totalTasks) * 100) || 0;
   const pendingHomeworkCount = myHomework.filter(h => h.status === 'pending' || (h.status === 'overdue' && new Date() > new Date(h.due_date))).length;
 
-  // -- Teacher Analytics (Correctly placed at top level) --
   const performanceData = useMemo(() => {
       if (!studentResults || studentResults.length === 0) return [];
       
@@ -1134,8 +1184,6 @@ export default function App() {
       });
   }, [studentResults]);
 
-  // -- Render Components -- 
-  
   const ToastContainer = () => (
     <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2">
       {toasts.map(t => (
@@ -1152,11 +1200,8 @@ export default function App() {
     </div>
   );
 
-  // Online Status Bar Component - UPDATED to be a top block element
   const OnlineStatusBar = () => {
-      // Filter online users based on current user role
       if (userProfile.role === 'teacher') {
-          // Show students
           const onlineStudents = Object.values(onlineUsers).filter((u: any) => u.role === 'student');
           if (onlineStudents.length === 0) return null;
           
@@ -1170,7 +1215,6 @@ export default function App() {
               </div>
           );
       } else if (userProfile.role === 'student') {
-          // Show if teacher is online
           const teacherOnline = Object.values(onlineUsers).some((u: any) => u.role === 'teacher');
           if (!teacherOnline) return null;
 
@@ -1187,7 +1231,6 @@ export default function App() {
       return null;
   };
 
-  // Enhance students list with online status for modal
   const trackedStudentsWithStatus = useMemo(() => {
       return trackedStudents.map(student => ({
           ...student,
@@ -1244,8 +1287,6 @@ export default function App() {
       return { completed, total };
   };
   
-  // ... Render Functions ...
-
   const renderList = (stories: Story[], type: ExerciseType) => {
     let title = 'Grammar';
     let subtitle = 'Tenses & Forms';
@@ -1267,7 +1308,7 @@ export default function App() {
                 <button 
                     onClick={() => {
                         setSelectedStudentForAssignment(null);
-                        setStudentHomework([]); // Clear context
+                        setStudentHomework([]); 
                         goHome();
                     }}
                     className="text-indigo-200 hover:text-white text-xs font-bold uppercase tracking-wider"
@@ -1277,7 +1318,6 @@ export default function App() {
             </div>
         )}
 
-        {/* Teacher Warning: No Student Selected */}
         {userProfile.role === 'teacher' && !selectedStudentForAssignment && (
             <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl mb-6 flex items-center gap-3 shadow-sm animate-fade-in">
                 <div className="p-1.5 bg-amber-100 rounded-full shrink-0">
@@ -1305,7 +1345,6 @@ export default function App() {
         </div>
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
           {stories.map((story, idx) => {
-            // Determine status for styling if in assignment mode
             let isAssigned = false;
             let isCompleted = false;
             
@@ -1375,7 +1414,6 @@ export default function App() {
                
                {activeStory ? (
                    <div className="mt-4">
-                       {/* Grammar/Vocab View */}
                        {(session.exerciseType === ExerciseType.GRAMMAR || session.exerciseType === ExerciseType.VOCABULARY) && (
                            <div className="leading-[2.5] text-lg text-slate-800">
                                {activeStory.template.map((sentence, idx) => {
@@ -1394,7 +1432,7 @@ export default function App() {
                                                    
                                                    return (
                                                        <span key={partIndex} className="inline-block mx-2 relative align-middle group">
-                                                           <span className={`absolute left-0 text-[10px] font-bold tracking-wider text-indigo-500 bg-white px-1 pointer-events-none z-10 ${hasValue ? '-top-3 opacity-100 scale-100' : 'top-2.5 opacity-0 scale-90'}`}>
+                                                           <span className={`absolute left-0 text-[10px] font-bold tracking-wider text-indigo-500 bg-white px-1 transition-all duration-200 pointer-events-none z-10 ${hasValue ? '-top-3 opacity-100 scale-100' : 'top-2.5 opacity-0 scale-90'}`}>
                                                                {task.word}
                                                            </span>
                                                            <input 
@@ -1414,7 +1452,6 @@ export default function App() {
                            </div>
                        )}
 
-                       {/* Reading Matching View */}
                        {session.exerciseType === ExerciseType.READING && activeStory.texts && activeStory.readingAnswers && (
                            <div className="grid gap-6">
                                {activeStory.texts.map((textItem) => {
@@ -1442,7 +1479,6 @@ export default function App() {
                            </div>
                        )}
 
-                       {/* Default/Fallback View */}
                        {!((session.exerciseType === ExerciseType.GRAMMAR || session.exerciseType === ExerciseType.VOCABULARY) || (session.exerciseType === ExerciseType.READING && activeStory.texts)) && (
                            <div className="bg-slate-50 p-6 rounded-xl text-slate-500 text-center">
                                Visualization for this exercise type is currently simplified.
@@ -1529,7 +1565,6 @@ export default function App() {
                   <div>
                       <h2 className="text-2xl font-bold text-slate-900 mb-6">Live Classroom</h2>
                       
-                      {/* Session Control Header */}
                       {!liveSessionActive ? (
                         <div className="bg-white rounded-2xl p-8 border-2 border-dashed border-slate-200 text-center mb-8">
                           <h3 className="text-xl font-bold text-slate-800 mb-4">Start Live Classroom Session</h3>
@@ -1544,7 +1579,6 @@ export default function App() {
                         </div>
                       ) : (
                         <div className="space-y-6 mb-8">
-                          {/* Active Session Banner */}
                           <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-6 rounded-2xl shadow-xl">
                             <div className="flex justify-between items-center">
                               <div>
@@ -1561,7 +1595,6 @@ export default function App() {
                             </div>
                           </div>
 
-                          {/* Exercise Browser with Push Buttons */}
                           {!expandedStudentId && (
                             <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
                               <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
@@ -1569,7 +1602,6 @@ export default function App() {
                                   Push Exercise to Students
                               </h4>
                               
-                              {/* Category Tabs */}
                               <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
                                   {allCategoriesForPush.map(cat => (
                                       <button
@@ -1586,7 +1618,6 @@ export default function App() {
                                   ))}
                               </div>
 
-                              {/* Exercise Grid */}
                               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
                                 {allCategoriesForPush.find(c => c.type === liveSessionPushTab)?.stories.map((story, idx) => (
                                   <div key={idx} className="border border-slate-100 rounded-xl p-3 hover:border-indigo-300 transition-all group bg-slate-50/50 hover:bg-white">
@@ -1609,14 +1640,9 @@ export default function App() {
                         </div>
                       )}
 
-                      {/* Live Monitoring Grid */}
-                      
-                      {/* View Logic: Either Grid (Overview) or Single (Fullscreen) */}
                       {expandedStudentId && liveStudents[expandedStudentId] ? (
-                          // --- FULLSCREEN MODE ---
                           renderLiveStudentDetail(liveStudents[expandedStudentId])
                       ) : (
-                          // --- OVERVIEW GRID MODE ---
                           <>
                             <h4 className="font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2 flex justify-between items-center">
                                 <span>Student Activity</span>
@@ -1633,14 +1659,12 @@ export default function App() {
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                     {activeSessions.map((session: LiveSession) => {
                                         const isIdle = Date.now() - session.lastActivity > 120000;
-                                        // Compact card
                                         return (
                                             <div 
                                                 key={session.studentId} 
                                                 onClick={() => setExpandedStudentId(session.studentId)}
                                                 className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer h-48 flex flex-col justify-between group"
                                             >
-                                                {/* Header */}
                                                 <div className="flex justify-between items-start">
                                                     <div className="flex items-center gap-3">
                                                         <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm border border-indigo-100 group-hover:bg-indigo-100 transition-colors">
@@ -1654,14 +1678,12 @@ export default function App() {
                                                     <div className={`w-2.5 h-2.5 rounded-full ${isIdle ? 'bg-amber-400' : 'bg-emerald-500 animate-pulse'}`}></div>
                                                 </div>
                                                 
-                                                {/* Task Title */}
                                                 <div className="mt-2">
                                                     <div className="text-sm font-medium text-slate-600 line-clamp-1" title={session.exerciseTitle}>
                                                         {session.exerciseTitle}
                                                     </div>
                                                 </div>
 
-                                                {/* Input Preview (Footer) */}
                                                 <div className={`mt-auto p-3 rounded-lg border text-xs font-mono transition-colors ${
                                                     session.isCorrect === true ? 'bg-emerald-50 border-emerald-100 text-emerald-800' :
                                                     session.isCorrect === false ? 'bg-rose-50 border-rose-100 text-rose-800' :
@@ -1684,7 +1706,6 @@ export default function App() {
 
               {dashboardTab === 'STUDENTS' && (
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                      {/* Student List */}
                       <div className="lg:col-span-1 bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col h-[calc(100vh-100px)]">
                           <div className="p-4 border-b border-slate-100">
                               <h3 className="font-bold text-slate-800 mb-2">Tracked Students</h3>
@@ -1718,11 +1739,10 @@ export default function App() {
                                           </div>
                                           <div className="text-xs text-slate-500">{student.email}</div>
                                           
-                                          {/* Quick Actions */}
                                           <div className="flex gap-2 mt-3">
                                               <button 
                                                   onClick={(e) => { e.stopPropagation(); startAssignmentFlow(student); }}
-                                                  className="bg-white border border-indigo-200 text-indigo-600 px-3 py-1 rounded-lg text-xs font-bold hover:bg-indigo-50 transition-colors"
+                                                  className="bg-white border border-indigo-200 text-indigo-600 px-3 rounded-lg text-xs font-bold hover:bg-indigo-50 transition-colors"
                                               >
                                                   Assign Homework
                                               </button>
@@ -1739,7 +1759,6 @@ export default function App() {
                           </div>
                       </div>
 
-                      {/* Student Details */}
                       <div className="lg:col-span-2">
                           {selectedStudentForView ? (
                               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-full min-h-[500px]">
@@ -1776,7 +1795,6 @@ export default function App() {
                                       )}
                                   </div>
                                   
-                                  {/* Result Detail Modal/Panel */}
                                   {resultDetail && (
                                       <div className="mt-6 border-t border-slate-100 pt-6 animate-fade-in">
                                           <h4 className="font-bold text-slate-800 mb-4">Attempt Details: {resultDetail.exercise_title}</h4>
@@ -1841,10 +1859,7 @@ export default function App() {
                                               </div>
                                               <button 
                                                   className="text-xs text-indigo-500 font-bold opacity-0 group-hover:opacity-100 transition-opacity"
-                                                  onClick={() => {
-                                                      // Assuming we have a way to view details, for now just reuse the logic
-                                                      // Could set resultDetail if we fetch the result object
-                                                  }}
+                                                  onClick={() => {}}
                                               >
                                                   View Details
                                               </button>
@@ -1895,7 +1910,6 @@ export default function App() {
           <ToastContainer />
           
           <div className="flex-1 overflow-y-auto relative z-10 flex flex-col">
-            {/* Main Content Area - Shows categories when not in a specific view */}
             {view === ViewState.HOME && userProfile.role === 'student' && !selectedStory && (
               <div className="max-w-7xl mx-auto px-4 py-8 w-full">
                 <div className="mb-12 text-center">
@@ -1907,7 +1921,6 @@ export default function App() {
                   </p>
                 </div>
 
-                {/* Live Session Join (Student) */}
                 {userProfile.role === 'student' && !joinedSessionCode && (
                   <div className="mb-8 bg-gradient-to-r from-purple-500 to-pink-500 text-white p-6 rounded-2xl shadow-xl flex flex-col md:flex-row items-center justify-between gap-6 max-w-3xl mx-auto">
                     <div>
@@ -1936,7 +1949,6 @@ export default function App() {
                   </div>
                 )}
                 
-                {/* Live Session Active Banner (Student) */}
                 {joinedSessionCode && (
                    <div className="mb-8 bg-indigo-600 text-white p-4 rounded-2xl shadow-lg flex items-center justify-between max-w-3xl mx-auto animate-fade-in">
                        <div className="flex items-center gap-3">
@@ -1947,7 +1959,6 @@ export default function App() {
                    </div>
                 )}
 
-                {/* Progress Overview */}
                 <div className="bg-white/90 backdrop-blur rounded-3xl p-8 shadow-xl border border-slate-100 mb-12 flex flex-col md:flex-row items-center justify-between gap-8">
                     <div className="flex items-center gap-6">
                         <div className="relative w-24 h-24 flex items-center justify-center">
@@ -1963,7 +1974,6 @@ export default function App() {
                         </div>
                     </div>
                     
-                    {/* Homework Alert */}
                     <div 
                       onClick={() => setView(ViewState.HOMEWORK_LIST)}
                       className="flex items-center gap-4 bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-4 rounded-2xl shadow-lg cursor-pointer hover:scale-105 transition-transform"
@@ -2047,7 +2057,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Conditional Views based on State */}
             {view === ViewState.REGISTRATION && (
               <div className="flex items-center justify-center min-h-[calc(100vh-60px)] p-4">
                 <div className="bg-white p-8 md:p-12 rounded-3xl shadow-xl w-full max-w-md border border-slate-100 relative overflow-hidden">
@@ -2261,10 +2270,8 @@ export default function App() {
               </div>
             )}
 
-            {/* Teacher Dashboard View */}
             {view === ViewState.HOME && userProfile.role === 'teacher' && !selectedStudentForAssignment && renderTeacherDashboard()}
 
-            {/* Exercise Lists */}
             {view === ViewState.GRAMMAR_LIST && renderList(grammarStories, ExerciseType.GRAMMAR)}
             {view === ViewState.VOCAB_LIST && renderList(vocabStories, ExerciseType.VOCABULARY)}
             {view === ViewState.READING_LIST && renderList([...readingStories, ...readingTrueFalseStories], ExerciseType.READING)}
@@ -2273,7 +2280,6 @@ export default function App() {
             {view === ViewState.ORAL_LIST && renderList([...oralStories, ...monologueStories], ExerciseType.ORAL_SPEECH)}
             {view === ViewState.WRITING_LIST && renderList(writingStories, ExerciseType.WRITING)}
 
-            {/* Exercise View */}
             {view === ViewState.EXERCISE && selectedStory && (
               <ExerciseView 
                 story={selectedStory} 
@@ -2284,7 +2290,6 @@ export default function App() {
               />
             )}
 
-            {/* Student Homework View */}
             {view === ViewState.HOMEWORK_LIST && (
                 <StudentHomeworkView 
                     assignments={myHomework}
@@ -2296,7 +2301,6 @@ export default function App() {
             )}
           </div>
 
-          {/* Teacher Settings Shortcut - Moved to Bottom Left */}
           {userProfile.role && view !== ViewState.SETTINGS && view !== ViewState.EXERCISE && view !== ViewState.REGISTRATION && view !== ViewState.FORGOT_PASSWORD && view !== ViewState.ROLE_SELECTION && (
              <div className="fixed bottom-6 left-6 z-50">
                  <button 
