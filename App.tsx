@@ -75,6 +75,8 @@ function App() {
   const [completedStories, setCompletedStories] = useState<Set<string>>(new Set());
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [selectedType, setSelectedType] = useState<ExerciseType>(ExerciseType.GRAMMAR);
+  // Track where the user came from to handle "Back" button correctly
+  const [exerciseSource, setExerciseSource] = useState<'CATALOG' | 'HOMEWORK'>('CATALOG');
   
   // Auth state
   const [email, setEmail] = useState('');
@@ -669,9 +671,11 @@ function App() {
     }
   };
 
-  const startExercise = (story: Story, type: ExerciseType) => {
+  // Tracking source for navigation
+  const startExercise = (story: Story, type: ExerciseType, source: 'CATALOG' | 'HOMEWORK' = 'CATALOG') => {
     setSelectedStory(story);
     setSelectedType(type);
+    setExerciseSource(source);
     setView(ViewState.EXERCISE);
   };
 
@@ -681,6 +685,12 @@ function App() {
   };
 
   const getBackView = () => {
+    // If we came from homework, go back to homework list
+    if (exerciseSource === 'HOMEWORK') {
+        return ViewState.HOMEWORK_LIST;
+    }
+
+    // Otherwise standard behavior
     switch (selectedType) {
       case ExerciseType.GRAMMAR: return ViewState.GRAMMAR_LIST;
       case ExerciseType.VOCABULARY: return ViewState.VOCAB_LIST;
@@ -1048,7 +1058,7 @@ function App() {
               key={idx}
               story={story}
               type={type}
-              onClick={() => startExercise(story, type)}
+              onClick={() => startExercise(story, type, 'CATALOG')}
               isCompleted={completedStories.has(story.title)}
               onAssign={userProfile.role === 'teacher' ? () => assignTaskImmediately(story.title, type) : undefined}
             />
@@ -1344,7 +1354,7 @@ function App() {
       {view === ViewState.HOMEWORK_LIST && (
           <StudentHomeworkView 
             assignments={myHomework}
-            onStartExercise={startExercise}
+            onStartExercise={(story, type) => startExercise(story, type, 'HOMEWORK')}
             onBack={goHome}
             onRefresh={() => loadHomework(userProfile.id!)}
             loading={homeworkLoading}
