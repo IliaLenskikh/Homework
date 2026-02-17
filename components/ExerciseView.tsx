@@ -95,16 +95,15 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
     }
   }, [userProfile, story.title, type]);
 
-  const broadcastTyping = (questionId: string, input: string, isCorrect: boolean | null) => {
+  const broadcastTyping = (questionId: string, currentInput: string, allInputs: UserProgress, isCorrect: boolean | null) => {
       if (!broadcastChannelRef.current || !userProfile?.id) return;
 
       const now = Date.now();
-      // Simple throttle: max 1 event per 500ms to avoid flooding
-      if (now - lastBroadcastRef.current > 500) {
+      // Simple throttle: max 1 event per 300ms to avoid flooding, but frequent enough for live feel
+      if (now - lastBroadcastRef.current > 300) {
           // Calculate roughly progress
-          const totalQuestions = Object.keys(inputs).length > 0 ? Object.keys(inputs).length : 1; 
-          // Note: totalQuestions calculation is approximate here for simplicity
-          const progressPercentage = Math.min(100, Math.round((Object.keys(inputs).length / 10) * 10)); 
+          const totalQuestions = Object.keys(allInputs).length > 0 ? Object.keys(allInputs).length : 1; 
+          const progressPercentage = Math.min(100, Math.round((Object.keys(allInputs).length / 10) * 10)); 
 
           broadcastChannelRef.current.send({
               type: 'broadcast',
@@ -112,7 +111,8 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
               payload: {
                   studentId: userProfile.id,
                   questionId,
-                  input,
+                  input: currentInput, // Current active input
+                  allAnswers: allInputs, // ALL inputs to render full state
                   isCorrect,
                   timestamp: now,
                   progressPercentage
@@ -418,8 +418,9 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   // --- Input Logic ---
   
   const handleInputChange = (key: string, value: string) => {
-    setInputs(prev => ({ ...prev, [key]: value }));
-    broadcastTyping(key, value, null); // null correctness because we don't know yet
+    const newInputs = { ...inputs, [key]: value };
+    setInputs(newInputs);
+    broadcastTyping(key, value, newInputs, null); // Pass full inputs
     if (validation[key] !== undefined) {
       setValidation(prev => {
         const next = { ...prev };
@@ -439,7 +440,8 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
 
   const handleEmailChange = (text: string) => {
       setEmailContent(text);
-      broadcastTyping("email", text, null);
+      const newInputs = { ...inputs, email: text };
+      broadcastTyping("email", text, newInputs, null);
       const count = text.trim() === '' ? 0 : text.trim().split(/\s+/).length;
       setWordCount(count);
   }

@@ -274,6 +274,7 @@ export default function App() {
               ...payload.payload,
               currentQuestion: '',
               userInput: '',
+              allAnswers: {}, // Initialize empty
               isCorrect: null,
               progressPercentage: 0,
               lastActivity: Date.now()
@@ -286,7 +287,7 @@ export default function App() {
             ...prev,
             [payload.payload.studentId]: {
               ...prev[payload.payload.studentId],
-              ...payload.payload, // Updates questionId, input, isCorrect, progress
+              ...payload.payload, // Updates questionId, input, allAnswers, isCorrect, progress
               lastActivity: payload.payload.timestamp
             }
           }));
@@ -1345,7 +1346,7 @@ export default function App() {
   };
 
   const renderTeacherDashboard = () => {
-      const activeSessions = Object.values(liveStudents);
+      const activeSessions: LiveSession[] = Object.values(liveStudents);
 
       const allCategoriesForPush = [
         { type: ExerciseType.GRAMMAR, stories: grammarStories, label: 'Grammar' },
@@ -1507,7 +1508,8 @@ export default function App() {
                               }
                               
                               const isIdle = Date.now() - expandedSession.lastActivity > 120000;
-                              
+                              const activeStory = allStories.find(s => s.title === expandedSession.exerciseTitle && s.type === expandedSession.exerciseType);
+
                               return (
                                 <div className="animate-fade-in flex flex-col gap-6 h-full min-h-[calc(100vh-200px)]">
                                    {/* Header */}
@@ -1528,42 +1530,87 @@ export default function App() {
                                        </div>
                                    </div>
 
-                                   {/* Question Context */}
-                                   <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
-                                       <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Current Question / Task</h4>
-                                       <p className="text-lg text-slate-800 font-medium leading-relaxed">
-                                           {expandedSession.currentQuestion ? expandedSession.currentQuestion : 
-                                            expandedSession.exerciseTitle ? `Working on: ${expandedSession.exerciseTitle}` : "Waiting for activity..."}
-                                       </p>
-                                   </div>
-
-                                   {/* HUGE Live Input Area */}
-                                   <div className={`flex-1 bg-white p-8 rounded-2xl border-2 shadow-sm flex flex-col min-h-[300px] transition-colors relative overflow-hidden ${
-                                       expandedSession.isCorrect === true ? 'border-emerald-200 bg-emerald-50/30' :
-                                       expandedSession.isCorrect === false ? 'border-rose-200 bg-rose-50/30' :
-                                       'border-indigo-200'
-                                   }`}>
-                                       <div className="flex items-center gap-3 mb-6">
-                                           <div className="w-3 h-3 bg-rose-500 rounded-full animate-pulse"></div>
-                                           <span className="text-sm font-bold text-rose-500 uppercase tracking-widest">Student is typing</span>
-                                       </div>
+                                   {/* Exercise Context - Mirroring ExerciseView */}
+                                   <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
+                                       <h3 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
+                                           Working on: <span className="text-indigo-600">{expandedSession.exerciseTitle}</span>
+                                       </h3>
                                        
-                                       <div className="flex-1 font-mono text-3xl md:text-4xl leading-relaxed text-slate-900 break-words whitespace-pre-wrap">
-                                           {expandedSession.userInput}
-                                           <span className="animate-pulse text-indigo-400">|</span>
-                                       </div>
+                                       {activeStory && (
+                                           <div className="mt-4">
+                                               {(expandedSession.exerciseType === ExerciseType.GRAMMAR || expandedSession.exerciseType === ExerciseType.VOCABULARY) && (
+                                                   <div className="leading-[2.5] text-lg text-slate-800">
+                                                       {activeStory.template.map((sentence, idx) => {
+                                                           const parts = sentence.split(/\{(\d+)\}/);
+                                                           return (
+                                                               <span key={idx}>
+                                                                   {parts.map((part, partIndex) => {
+                                                                       if (partIndex % 2 === 0) {
+                                                                           return <span key={partIndex}>{part}</span>;
+                                                                       } else {
+                                                                           const taskIndex = parseInt(part);
+                                                                           const task = activeStory.tasks[taskIndex];
+                                                                           const taskId = taskIndex.toString();
+                                                                           const studentAnswer = expandedSession.allAnswers[taskId] || '';
+                                                                           const hasValue = studentAnswer.length > 0;
+                                                                           
+                                                                           return (
+                                                                               <span key={partIndex} className="inline-block mx-2 relative align-middle group">
+                                                                                   <span className={`absolute left-0 text-[10px] font-bold tracking-wider text-indigo-500 bg-white px-1 pointer-events-none z-10 ${hasValue ? '-top-3 opacity-100 scale-100' : 'top-2.5 opacity-0 scale-90'}`}>
+                                                                                       {task.word}
+                                                                                   </span>
+                                                                                   <input 
+                                                                                       type="text" 
+                                                                                       value={studentAnswer} 
+                                                                                       readOnly
+                                                                                       className={`h-10 px-3 min-w-[140px] text-center font-semibold rounded-lg border-2 outline-none transition-all duration-200 bg-slate-50 border-slate-200 text-slate-800`}
+                                                                                   />
+                                                                               </span>
+                                                                           );
+                                                                       }
+                                                                   })}
+                                                                   {' '}
+                                                               </span>
+                                                           );
+                                                       })}
+                                                   </div>
+                                               )}
 
-                                       {/* Correctness Indicator */}
-                                       {expandedSession.isCorrect !== null && (
-                                           <div className={`mt-auto self-start px-6 py-3 rounded-xl text-xl font-bold shadow-sm flex items-center gap-2 ${
-                                               expandedSession.isCorrect 
-                                               ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' 
-                                               : 'bg-rose-100 text-rose-700 border border-rose-200'
-                                           }`}>
-                                               {expandedSession.isCorrect 
-                                                ? <><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg> Correct</> 
-                                                : <><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg> Incorrect</>
-                                               }
+                                               {expandedSession.exerciseType === ExerciseType.READING && activeStory.texts && activeStory.readingAnswers && (
+                                                   <div className="grid gap-6">
+                                                       {activeStory.texts.map((textItem) => {
+                                                           const studentAnswer = expandedSession.allAnswers[textItem.letter];
+                                                           return (
+                                                               <div key={textItem.letter} className="bg-slate-50 rounded-xl p-4 border border-slate-100">
+                                                                   <div className="flex items-center gap-3 mb-2">
+                                                                       <div className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center font-bold">{textItem.letter}</div>
+                                                                       <p className="text-sm text-slate-600 line-clamp-2">{textItem.content}</p>
+                                                                   </div>
+                                                                   <div className="flex justify-end gap-2 mt-2">
+                                                                       {activeStory.template.map((_, idx) => {
+                                                                           const num = (idx + 1).toString();
+                                                                           const isSelected = studentAnswer === num;
+                                                                           return (
+                                                                               <div key={num} className={`w-8 h-8 rounded-lg text-sm font-bold flex items-center justify-center border-2 ${isSelected ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-400 border-slate-200'}`}>
+                                                                                   {num}
+                                                                               </div>
+                                                                           )
+                                                                       })}
+                                                                   </div>
+                                                               </div>
+                                                           )
+                                                       })}
+                                                   </div>
+                                               )}
+                                               
+                                               {!((expandedSession.exerciseType === ExerciseType.GRAMMAR || expandedSession.exerciseType === ExerciseType.VOCABULARY) || (expandedSession.exerciseType === ExerciseType.READING && activeStory.texts)) && (
+                                                   <div className="bg-slate-50 p-6 rounded-xl text-slate-500 text-center">
+                                                       Visualization for this exercise type is currently simplified.
+                                                       <div className="mt-4 text-left font-mono bg-white p-4 rounded border text-xs overflow-auto max-h-60">
+                                                           {JSON.stringify(expandedSession.allAnswers, null, 2)}
+                                                       </div>
+                                                   </div>
+                                               )}
                                            </div>
                                        )}
                                    </div>
@@ -1586,7 +1633,7 @@ export default function App() {
                                 </div>
                             ) : (
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                    {activeSessions.map(session => {
+                                    {activeSessions.map((session: LiveSession) => {
                                         const isIdle = Date.now() - session.lastActivity > 120000;
                                         // Compact card
                                         return (
@@ -2065,204 +2112,4 @@ export default function App() {
                   </form>
 
                   <div className="mt-8 text-center space-y-3">
-                    <button onClick={() => setIsLoginMode(!isLoginMode)} className="text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors">
-                      {isLoginMode ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
-                    </button>
-                    <div className="block">
-                      <button onClick={() => setView(ViewState.FORGOT_PASSWORD)} className="text-indigo-500 hover:text-indigo-700 text-xs font-bold transition-colors">
-                        Forgot Password?
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {view === ViewState.FORGOT_PASSWORD && (
-              <div className="flex items-center justify-center min-h-[calc(100vh-60px)] p-4">
-                <div className="bg-white p-8 md:p-12 rounded-3xl shadow-xl w-full max-w-md border border-slate-100 text-center">
-                  <h2 className="text-2xl font-bold text-slate-900 mb-2">Reset Password</h2>
-                  <p className="text-slate-500 mb-8 text-sm">Enter your email to receive a reset link</p>
-                  
-                  {authSuccessMsg ? (
-                      <div className="bg-emerald-50 text-emerald-600 p-4 rounded-xl mb-6 text-sm border border-emerald-100">
-                          {authSuccessMsg}
-                      </div>
-                  ) : (
-                      <form onSubmit={handlePasswordReset} className="space-y-4">
-                          <input 
-                              type="email" 
-                              placeholder="Email" 
-                              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none"
-                              value={email}
-                              onChange={(e) => setEmail(e.target.value)}
-                              required
-                          />
-                          <button 
-                              type="submit" 
-                              disabled={loading}
-                              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl transition-all"
-                          >
-                              {loading ? 'Sending...' : 'Send Reset Link'}
-                          </button>
-                      </form>
-                  )}
-                  <button onClick={() => setView(ViewState.REGISTRATION)} className="mt-6 text-slate-400 hover:text-slate-600 text-sm font-bold">
-                      Back to Login
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {view === ViewState.ROLE_SELECTION && (
-                <div className="flex items-center justify-center min-h-[calc(100vh-60px)] p-4">
-                    <div className="bg-white p-10 rounded-3xl shadow-xl w-full max-w-lg border border-slate-100 text-center">
-                        <h2 className="text-3xl font-extrabold text-slate-900 mb-4">Choose your role</h2>
-                        <p className="text-slate-500 mb-10">How will you use this platform?</p>
-                        
-                        <div className="grid grid-cols-2 gap-6">
-                            <button 
-                                onClick={() => handleRoleSelection('student')}
-                                className="p-6 rounded-2xl border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50 transition-all group flex flex-col items-center gap-4"
-                            >
-                                <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                                    <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>
-                                </div>
-                                <span className="font-bold text-slate-700 group-hover:text-indigo-700">Student</span>
-                            </button>
-
-                            <button 
-                                onClick={() => handleRoleSelection('teacher')}
-                                className="p-6 rounded-2xl border-2 border-slate-100 hover:border-emerald-500 hover:bg-emerald-50 transition-all group flex flex-col items-center gap-4"
-                            >
-                                <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                                    <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-                                </div>
-                                <span className="font-bold text-slate-700 group-hover:text-emerald-700">Teacher</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {view === ViewState.SETTINGS && (
-              <div className="flex items-center justify-center min-h-[calc(100vh-60px)] p-4">
-                <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-lg border border-slate-100">
-                  <div className="flex items-center justify-between mb-8">
-                      <h2 className="text-2xl font-bold text-slate-900">Settings</h2>
-                      <button onClick={goHome} className="text-slate-400 hover:text-slate-600">
-                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                      </button>
-                  </div>
-                  
-                  <form onSubmit={handleSettingsSave} className="space-y-6">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Full Name</label>
-                      <input 
-                        type="text" 
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-medium"
-                        value={userProfile.name}
-                        onChange={(e) => setUserProfile({...userProfile, name: e.target.value})}
-                      />
-                    </div>
-                    
-                    {userProfile.role === 'student' && (
-                        <div>
-                          <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Teacher's Email (for reports)</label>
-                          <input 
-                            type="email" 
-                            className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-medium"
-                            value={userProfile.teacherEmail}
-                            onChange={(e) => setUserProfile({...userProfile, teacherEmail: e.target.value})}
-                          />
-                        </div>
-                    )}
-
-                    <div className="pt-4 border-t border-slate-100">
-                        <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Change Password</label>
-                        <input 
-                          type="password" 
-                          placeholder="New Password"
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-medium"
-                          value={newPassword}
-                          onChange={(e) => setNewPassword(e.target.value)}
-                        />
-                    </div>
-
-                    <div className="flex gap-4 pt-4">
-                        <button 
-                          type="submit" 
-                          disabled={loading}
-                          className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl transition-all shadow-lg active:scale-95"
-                        >
-                          {loading ? 'Saving...' : 'Save Changes'}
-                        </button>
-                        <button 
-                          type="button"
-                          onClick={handleLogout}
-                          className="px-6 py-3 bg-rose-50 text-rose-600 font-bold rounded-xl hover:bg-rose-100 transition-colors"
-                        >
-                          Log Out
-                        </button>
-                    </div>
-                  </form>
-
-                  <div className="mt-8 pt-6 border-t border-slate-100 text-center">
-                      <button onClick={handleRoleSwitch} className="text-xs font-bold text-slate-400 hover:text-indigo-600 underline transition-colors">
-                          Switch Role (Debug)
-                      </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Teacher Dashboard View */}
-            {view === ViewState.HOME && userProfile.role === 'teacher' && !selectedStudentForAssignment && renderTeacherDashboard()}
-
-            {/* Exercise Lists */}
-            {view === ViewState.GRAMMAR_LIST && renderList(grammarStories, ExerciseType.GRAMMAR)}
-            {view === ViewState.VOCAB_LIST && renderList(vocabStories, ExerciseType.VOCABULARY)}
-            {view === ViewState.READING_LIST && renderList([...readingStories, ...readingTrueFalseStories], ExerciseType.READING)}
-            {view === ViewState.LISTENING_LIST && renderList(listeningStories, ExerciseType.LISTENING)}
-            {view === ViewState.SPEAKING_LIST && renderList(speakingStories, ExerciseType.SPEAKING)}
-            {view === ViewState.ORAL_LIST && renderList([...oralStories, ...monologueStories], ExerciseType.ORAL_SPEECH)}
-            {view === ViewState.WRITING_LIST && renderList(writingStories, ExerciseType.WRITING)}
-
-            {/* Exercise View */}
-            {view === ViewState.EXERCISE && selectedStory && (
-              <ExerciseView 
-                story={selectedStory} 
-                type={selectedType}
-                onBack={() => setView(getBackView())}
-                onComplete={(score, maxScore, details) => handleStoryComplete(selectedStory.title, score, maxScore, details)}
-                userProfile={userProfile}
-              />
-            )}
-
-            {/* Student Homework View */}
-            {view === ViewState.HOMEWORK_LIST && (
-                <StudentHomeworkView 
-                    assignments={myHomework}
-                    onStartExercise={(story, type) => startExercise(story, type, 'HOMEWORK')}
-                    onBack={goHome}
-                    onRefresh={() => userProfile.id && loadHomework(userProfile.id)}
-                    loading={homeworkLoading}
-                />
-            )}
-          </div>
-
-          {/* Teacher Settings Shortcut - Moved to Bottom Left */}
-          {userProfile.role && view !== ViewState.SETTINGS && view !== ViewState.EXERCISE && view !== ViewState.REGISTRATION && view !== ViewState.FORGOT_PASSWORD && view !== ViewState.ROLE_SELECTION && (
-             <div className="fixed bottom-6 left-6 z-50">
-                 <button 
-                    onClick={() => setView(ViewState.SETTINGS)}
-                    className="w-12 h-12 bg-white/90 backdrop-blur rounded-full shadow-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:text-indigo-600 hover:border-indigo-300 transition-all hover:scale-110 active:scale-95"
-                    title="Settings"
-                 >
-                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                 </button>
-             </div>
-          )}
-      </div>
-  );
-}
+                    <button onClick={() => setIsLoginMode(!isLoginMode)} className="text-slate-500 hover:text-slate-800 text-sm font

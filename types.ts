@@ -139,6 +139,7 @@ export interface LiveSession {
   exerciseType: ExerciseType;
   currentQuestion: string;
   userInput: string;
+  allAnswers: Record<string, string>; // Tracks ALL inputs, not just current one
   isCorrect: boolean | null;
   progressPercentage: number;
   startedAt: string;
