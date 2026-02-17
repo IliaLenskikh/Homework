@@ -92,7 +92,19 @@ const HomeworkModal: React.FC<HomeworkModalProps> = ({
       return;
     }
     
+    // Determine which student ID to use
+    // If studentName was provided prop, the parent handles ID. 
+    // BUT we changed onAssign signature to require ID. 
+    // We need to ensure the parent passes the correct ID or we use the selected one.
+    
     let targetId = selectedStudentId;
+    
+    // If we are in "Assign to specific student" mode (Teacher Dashboard), 
+    // the parent might have passed a student object. 
+    // However, to keep it clean, let's assume if studentName is missing, we MUST pick from dropdown.
+    // If studentName is present, we might need to rely on the parent knowing the ID (or we pass empty string and parent handles it).
+    // Let's adapt the logic: if studentName is present, we assume parent knows the ID and we can pass "" or handle it there.
+    // actually, to be robust:
     
     if (!studentName && !targetId) {
         alert("Please select a student.");
@@ -147,7 +159,7 @@ const HomeworkModal: React.FC<HomeworkModalProps> = ({
               <div className="flex-1 p-10 flex flex-col items-center justify-center bg-slate-50/50">
                   <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center max-w-md w-full">
                       <div className="w-16 h-16 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
+                        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
                       </div>
                       <h3 className="text-xl font-bold text-slate-800 mb-2">Assigning Single Task</h3>
                       <p className="text-slate-500 mb-4">{preSelectedTask.title}</p>
