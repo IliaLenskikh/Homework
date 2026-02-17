@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { supabase } from './services/supabaseClient';
 import { AuthChangeEvent, Session } from '@supabase/supabase-js';
 import { Story, ExerciseType, AttemptDetail, UserProfile, UserRole, HomeworkAssignment, StudentResult } from './types';
@@ -910,7 +910,16 @@ function App() {
         backgroundImage: 'linear-gradient(#e2e8f0 1px, transparent 1px), linear-gradient(to right, #e2e8f0 1px, transparent 1px)',
         backgroundSize: '24px 24px'
     }}>
-      <div className="absolute top-6 right-6 z-10">
+      <div className="absolute top-6 right-6 z-10 flex gap-4">
+         {userProfile.role === 'teacher' && (
+            <button
+                onClick={() => setView(ViewState.TEACHER_DASHBOARD)}
+                className="p-3 bg-white/80 hover:bg-white rounded-full shadow-sm backdrop-blur-sm border border-slate-200 transition-all text-slate-500 hover:text-indigo-600"
+                title="Students"
+            >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+            </button>
+         )}
          <button 
             onClick={() => setView(ViewState.SETTINGS)}
             className="p-3 bg-white/80 hover:bg-white rounded-full shadow-sm backdrop-blur-sm border border-slate-200 transition-all text-slate-500 hover:text-indigo-600"
@@ -1068,7 +1077,43 @@ function App() {
     );
   };
 
-  const renderTeacherDashboard = () => (
+  const renderTeacherDashboard = () => {
+      // Logic for analytics
+      const performanceData = useMemo(() => {
+          if (!studentResults || studentResults.length === 0) return [];
+          
+          const stats: Record<string, { totalScore: number, maxScore: number, count: number }> = {};
+          
+          studentResults.forEach(res => {
+              if (!stats[res.exercise_type]) {
+                  stats[res.exercise_type] = { totalScore: 0, maxScore: 0, count: 0 };
+              }
+              stats[res.exercise_type].totalScore += res.score;
+              stats[res.exercise_type].maxScore += res.max_score;
+              stats[res.exercise_type].count += 1;
+          });
+
+          return Object.keys(stats).map(type => {
+              const data = stats[type];
+              const percentage = data.maxScore > 0 ? Math.round((data.totalScore / data.maxScore) * 100) : 0;
+              return { type: type as ExerciseType, percentage, count: data.count };
+          });
+      }, [studentResults]);
+
+      const getTypeColor = (type: ExerciseType) => {
+        switch(type) {
+            case ExerciseType.GRAMMAR: return 'bg-indigo-500 text-indigo-600 bg-indigo-100';
+            case ExerciseType.VOCABULARY: return 'bg-teal-500 text-teal-600 bg-teal-100';
+            case ExerciseType.SPEAKING: return 'bg-rose-500 text-rose-600 bg-rose-100';
+            case ExerciseType.ORAL_SPEECH: return 'bg-purple-500 text-purple-600 bg-purple-100';
+            case ExerciseType.WRITING: return 'bg-blue-500 text-blue-600 bg-blue-100';
+            case ExerciseType.READING: return 'bg-amber-500 text-amber-600 bg-amber-100';
+            case ExerciseType.LISTENING: return 'bg-cyan-500 text-cyan-600 bg-cyan-100';
+            default: return 'bg-gray-500 text-gray-600 bg-gray-100';
+        }
+      };
+
+      return (
       <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
           <div className="w-full md:w-80 bg-white border-r border-slate-200 flex flex-col h-screen sticky top-0">
               <div className="p-6 border-b border-slate-100">
@@ -1125,10 +1170,6 @@ function App() {
                   )}
               </div>
               <div className="p-4 border-t border-slate-100 flex flex-col gap-2">
-                  <button onClick={() => setView(ViewState.SETTINGS)} className="flex items-center gap-2 text-sm text-slate-500 hover:text-indigo-600 px-2 py-2 rounded hover:bg-slate-50 transition-colors w-full">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                      Back to Settings
-                  </button>
                   <button onClick={goHome} className="flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 px-2 py-2 rounded hover:bg-slate-50 transition-colors w-full">
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
                       Back to Home
@@ -1164,6 +1205,42 @@ function App() {
                               </div>
                           </div>
                       </div>
+
+                      {/* Performance Analytics */}
+                      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 mb-8">
+                          <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+                              <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+                              Performance by Category
+                          </h3>
+                          {performanceData.length > 0 ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {performanceData.map(stat => {
+                                    const styles = getTypeColor(stat.type);
+                                    const barColor = styles.split(' ')[0]; // bg-color-500
+                                    const txtColor = styles.split(' ')[1]; // text-color-600
+                                    const bgColor = styles.split(' ')[2]; // bg-color-100
+
+                                    return (
+                                        <div key={stat.type} className="flex flex-col gap-1">
+                                            <div className="flex justify-between items-baseline text-sm">
+                                                <span className={`font-bold uppercase tracking-wider text-[10px] ${txtColor}`}>{stat.type.replace('_', ' ')}</span>
+                                                <span className="font-mono font-bold text-slate-600">{stat.percentage}%</span>
+                                            </div>
+                                            <div className={`w-full h-3 rounded-full ${bgColor} overflow-hidden`}>
+                                                <div 
+                                                    className={`h-full rounded-full transition-all duration-500 ${barColor}`} 
+                                                    style={{ width: `${stat.percentage}%` }}
+                                                />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                          ) : (
+                              <div className="text-center py-4 text-slate-400 text-sm">No activity data available yet.</div>
+                          )}
+                      </div>
+
                       <div className="flex gap-4 border-b border-slate-200 mb-6">
                         <button 
                           onClick={() => setDashboardTab('HISTORY')}
@@ -1322,6 +1399,7 @@ function App() {
           <ToastContainer />
       </div>
   );
+  }; // End of renderTeacherDashboard
 
   if (view === ViewState.TEACHER_DASHBOARD) {
       return renderTeacherDashboard();
