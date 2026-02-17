@@ -77,11 +77,11 @@ const ExerciseCard: React.FC<ExerciseCardProps> = ({ story, type, onClick, isCom
             {onAssign && (
               <button 
                 onClick={(e) => { e.stopPropagation(); onAssign(); }}
-                className="z-10 flex items-center gap-1 bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors font-bold"
-                title="Assign as Homework"
+                className="z-10 flex items-center gap-1 bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors font-bold whitespace-nowrap"
+                title="Add to Homework Drafts"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                Assign
+                Add to HW
               </button>
             )}
             <button 

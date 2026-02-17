@@ -36,7 +36,7 @@ enum ViewState {
   WRITING_LIST,
   EXERCISE,
   HOMEWORK_LIST,
-  TEACHER_DASHBOARD, // New state for the dashboard within settings
+  TEACHER_DASHBOARD, 
 }
 
 interface TrackedStudent {
@@ -48,8 +48,16 @@ interface TrackedStudent {
     pendingHomeworkCount?: number;
 }
 
+// Improved Error Handling
 const getErrorMessage = (error: any) => {
+  if (typeof error === 'string') return error;
   if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+      // Try to find a message property in common API error formats
+      if (error.message) return error.message;
+      if (error.error_description) return error.error_description;
+      return JSON.stringify(error);
+  }
   return String(error);
 };
 
@@ -64,7 +72,7 @@ function App() {
   // Auth state
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [newPassword, setNewPassword] = useState(''); // For settings/reset
+  const [newPassword, setNewPassword] = useState(''); 
   const [fullName, setFullName] = useState('');
   const [isLoginMode, setIsLoginMode] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -83,7 +91,12 @@ function App() {
   const [studentHomework, setStudentHomework] = useState<HomeworkAssignment[]>([]);
   const [dashboardTab, setDashboardTab] = useState<'HISTORY' | 'HOMEWORK'>('HISTORY');
   
-  // Homework Modal
+  // Draft Assignments (Shopping Cart for Homework)
+  const [draftAssignments, setDraftAssignments] = useState<{title: string, type: ExerciseType}[]>([]);
+  const [draftDueDate, setDraftDueDate] = useState('');
+  const [draftInstructions, setDraftInstructions] = useState('');
+
+  // Homework Modal (Legacy / Quick assign specific)
   const [isHomeworkModalOpen, setIsHomeworkModalOpen] = useState(false);
   const [studentToAssign, setStudentToAssign] = useState<TrackedStudent | null>(null);
   const [quickAssignTask, setQuickAssignTask] = useState<{title: string, type: ExerciseType} | undefined>(undefined);
@@ -93,12 +106,11 @@ function App() {
   useEffect(() => {
     checkSession();
     
-    // Listen for password recovery events (when user clicks email link)
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event: AuthChangeEvent, session: Session | null) => {
       if (event === 'PASSWORD_RECOVERY') {
         if (session) {
            await loadUserProfile(session.user.id, session.user.email!);
-           setView(ViewState.SETTINGS); // Send them to settings to change password
+           setView(ViewState.SETTINGS); 
            setAuthSuccessMsg("Please set a new password below.");
         }
       }
@@ -109,7 +121,6 @@ function App() {
     };
   }, []);
 
-  // Load tracked students from local storage on load (Teacher only)
   useEffect(() => {
       if (userProfile.role === 'teacher') {
           const saved = localStorage.getItem('tracked_students');
@@ -169,7 +180,6 @@ function App() {
             }
         }
       } else {
-        // Fallback if profile doesn't exist yet, but ensure ID is set so we can create it later
         setUserProfile({ id: userId, name: '', email: userEmail, teacherEmail: '' });
         setView(ViewState.ROLE_SELECTION);
       }
@@ -253,7 +263,6 @@ function App() {
           const { data: { user } } = await supabase.auth.getUser();
           if (!user) throw new Error("No user found");
 
-          // Use upsert to ensure profile exists
           const { error } = await supabase
               .from('profiles')
               .upsert({ 
@@ -405,16 +414,49 @@ function App() {
     setIsHomeworkModalOpen(true);
   };
 
-  const handleQuickAssign = (storyTitle: string, exerciseType: ExerciseType) => {
-      setQuickAssignTask({ title: storyTitle, type: exerciseType });
-      setStudentToAssign(null); // Clear specific student so modal allows selection
-      setIsHomeworkModalOpen(true);
+  const addToDrafts = (storyTitle: string, exerciseType: ExerciseType) => {
+      setDraftAssignments(prev => [...prev, { title: storyTitle, type: exerciseType }]);
+      // Quick visual feedback
+      const btn = document.activeElement as HTMLElement;
+      if(btn) {
+          const originalText = btn.innerHTML;
+          btn.innerHTML = `✓ Added`;
+          btn.classList.add('bg-emerald-100', 'text-emerald-700');
+          setTimeout(() => {
+              btn.innerHTML = originalText;
+              btn.classList.remove('bg-emerald-100', 'text-emerald-700');
+          }, 1500);
+      }
   };
 
-  // Modified to handle both specific student assignment and selection from list
+  const removeFromDrafts = (idx: number) => {
+      setDraftAssignments(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  // Confirm and Send Drafts from Dashboard
+  const handleConfirmDrafts = async () => {
+      if (!selectedStudentForView) {
+          alert("Please select a student from the sidebar first.");
+          return;
+      }
+      if (draftAssignments.length === 0) {
+          alert("No assignments selected.");
+          return;
+      }
+      if (!draftDueDate) {
+          alert("Please set a due date for these assignments.");
+          return;
+      }
+
+      await handleAssignHomework(selectedStudentForView.id, draftAssignments, draftDueDate, draftInstructions);
+      setDraftAssignments([]); // Clear drafts after success
+      setDraftDueDate('');
+      setDraftInstructions('');
+      setDashboardTab('HOMEWORK'); // Switch to view the list
+  };
+
   const handleAssignHomework = async (studentId: string, exercises: { title: string; type: ExerciseType }[], dueDate: string, instructions: string) => {
-    // If studentToAssign is set (from Dashboard), use its ID. Otherwise use the ID passed from modal selection.
-    const targetStudentId = studentToAssign?.id || studentId;
+    const targetStudentId = studentId;
     
     if (!targetStudentId || !userProfile.id) return;
     setLoading(true);
@@ -436,9 +478,12 @@ function App() {
 
       if (error) throw error;
 
-      alert('Homework assigned successfully!');
-      setIsHomeworkModalOpen(false);
+      // Refresh data
+      await fetchStudentHomework(targetStudentId);
       refreshStudentStats(trackedStudents); 
+      
+      alert('Homework assigned successfully!');
+      setIsHomeworkModalOpen(false); // Close legacy modal if open
     } catch (err: any) {
       alert('Failed to assign homework: ' + getErrorMessage(err));
     } finally {
@@ -519,7 +564,6 @@ function App() {
   };
 
   const handleRoleSwitch = async () => {
-      // Ensure we have a valid user ID to update
       if (!userProfile.id) {
           console.error("User ID missing, cannot switch role");
           alert("Please sign in again to switch roles.");
@@ -535,13 +579,12 @@ function App() {
 
       setLoading(true);
       try {
-          // Use upsert to handle cases where the profile row might be missing
           const { error } = await supabase
           .from('profiles')
           .upsert({ 
               id: userProfile.id,
               role: newRole,
-              email: userProfile.email // Ensure email is preserved if creating new row
+              email: userProfile.email 
            }, { onConflict: 'id' });
 
           if (error) throw error;
@@ -682,7 +725,7 @@ function App() {
             className="p-3 bg-white/80 hover:bg-white rounded-full shadow-sm backdrop-blur-sm border border-slate-200 transition-all text-slate-500 hover:text-indigo-600"
             title="Settings"
         >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
         </button>
       </div>
 
@@ -823,7 +866,7 @@ function App() {
               type={type}
               onClick={() => startExercise(story, type)}
               isCompleted={completedStories.has(story.title)}
-              onAssign={userProfile.role === 'teacher' ? () => handleQuickAssign(story.title, type) : undefined}
+              onAssign={userProfile.role === 'teacher' ? () => addToDrafts(story.title, type) : undefined}
             />
           ))}
         </div>
@@ -1087,13 +1130,6 @@ function App() {
                                       <div className="text-xs text-slate-400">{student.email}</div>
                                   </div>
                                   <div className="flex gap-2">
-                                    <button 
-                                      onClick={(e) => { e.stopPropagation(); openAssignHomeworkModal(student); }}
-                                      className="text-slate-300 hover:text-indigo-600 transition-colors"
-                                      title="Assign Homework"
-                                    >
-                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
-                                    </button>
                                     <button onClick={(e) => { e.stopPropagation(); handleRemoveStudent(student.email); }} className="text-slate-300 hover:text-red-400">
                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                                     </button>
@@ -1199,6 +1235,42 @@ function App() {
 
                               {dashboardTab === 'HOMEWORK' && (
                                 <div className="space-y-3">
+                                  {/* Drafts Section */}
+                                  {draftAssignments.length > 0 && (
+                                      <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100 mb-4">
+                                          <div className="flex justify-between items-center mb-3">
+                                              <h4 className="text-xs font-bold uppercase text-indigo-600">Draft Assignments ({draftAssignments.length})</h4>
+                                              <button onClick={handleConfirmDrafts} disabled={loading} className="px-3 py-1 bg-indigo-600 text-white text-xs font-bold rounded hover:bg-indigo-700 transition-colors">
+                                                  {loading ? 'Sending...' : 'Confirm & Send'}
+                                              </button>
+                                          </div>
+                                          <div className="space-y-2 mb-3">
+                                              {draftAssignments.map((draft, idx) => (
+                                                  <div key={idx} className="flex justify-between items-center text-sm bg-white p-2 rounded border border-indigo-100">
+                                                      <span className="truncate mr-2">{draft.title} <span className="text-slate-400 text-xs">({draft.type})</span></span>
+                                                      <button onClick={() => removeFromDrafts(idx)} className="text-rose-400 hover:text-rose-600">✕</button>
+                                                  </div>
+                                              ))}
+                                          </div>
+                                          <div className="space-y-2">
+                                              <input 
+                                                  type="date" 
+                                                  value={draftDueDate}
+                                                  onChange={(e) => setDraftDueDate(e.target.value)}
+                                                  className="w-full p-2 text-xs border border-indigo-200 rounded bg-white outline-none focus:border-indigo-400"
+                                              />
+                                              <input 
+                                                  type="text" 
+                                                  placeholder="Instructions (optional)"
+                                                  value={draftInstructions}
+                                                  onChange={(e) => setDraftInstructions(e.target.value)}
+                                                  className="w-full p-2 text-xs border border-indigo-200 rounded bg-white outline-none focus:border-indigo-400"
+                                              />
+                                          </div>
+                                      </div>
+                                  )}
+
+                                  {/* Assigned Homework List */}
                                   {studentHomework.map(hw => {
                                     const isOverdue = new Date() > new Date(hw.due_date) && hw.status !== 'completed';
                                     return (
@@ -1220,7 +1292,7 @@ function App() {
                                       </div>
                                     );
                                   })}
-                                  {studentHomework.length === 0 && <div className="text-slate-400 text-sm">No homework assigned yet.</div>}
+                                  {studentHomework.length === 0 && draftAssignments.length === 0 && <div className="text-slate-400 text-sm">No homework assigned yet.</div>}
                                 </div>
                               )}
                           </div>
