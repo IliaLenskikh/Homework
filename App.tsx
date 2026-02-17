@@ -205,7 +205,12 @@ function App() {
         .single();
 
       if (error && error.code !== 'PGRST116') {
-         console.error('Error loading profile:', error);
+         // If table not found, just log and continue to let user in (fallback mode)
+         if (error.code === '42P01') {
+             console.warn("Profiles table missing. Running in limited mode.");
+         } else {
+             console.error('Error loading profile:', error);
+         }
       }
 
       if (data) {
@@ -219,9 +224,7 @@ function App() {
         });
         setCompletedStories(new Set(data.completed_stories || []));
         
-        // Navigation Logic:
-        // If no role, go to selection. 
-        // If role exists, go to HOME (unless we are already in a deep view)
+        // Navigation Logic
         if (!data.role) {
             setView(ViewState.ROLE_SELECTION);
         } else {
@@ -316,7 +319,7 @@ function App() {
 
   const handleAssignHomework = async (targetStudentId: string, exercises: { title: string; type: ExerciseType }[], dueDate: string, instructions: string) => {
     if (!targetStudentId || !userProfile.id) {
-        showToast("Error: Missing student or teacher ID", "error");
+        showToast("Error: Missing student or teacher ID. Try refreshing.", "error");
         return;
     }
     
