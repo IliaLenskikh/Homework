@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { ExerciseType } from '../types';
+import { ExerciseType, Story } from '../types';
 import { grammarStories } from '../data/grammar';
 import { vocabStories } from '../data/vocabulary';
 import { readingStories } from '../data/reading';
@@ -180,7 +180,7 @@ const HomeworkModal: React.FC<HomeworkModalProps> = ({
                 {/* Exercise List */}
                 <div className="flex-1 overflow-y-auto p-6 bg-white">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {allCategories.find(c => c.type === activeTab)?.stories.map((story, idx) => {
+                    {allCategories.find(c => c.type === activeTab)?.stories.map((story: Story, idx: number) => {
                         const key = `${activeTab}:${story.title}`;
                         const isSelected = selectedTasks.includes(key);
                         return (
