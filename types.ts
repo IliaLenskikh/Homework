@@ -131,3 +131,16 @@ export interface HomeworkAssignment {
   score?: number;
   max_score?: number;
 }
+
+export interface LiveSession {
+  studentId: string;
+  studentName: string;
+  exerciseTitle: string;
+  exerciseType: ExerciseType;
+  currentQuestion: string;
+  userInput: string;
+  isCorrect: boolean | null;
+  progressPercentage: number;
+  startedAt: string;
+  lastActivity: number;
+}

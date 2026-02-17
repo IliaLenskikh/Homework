@@ -53,6 +53,75 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   const [emailContent, setEmailContent] = useState('');
   const [wordCount, setWordCount] = useState(0);
 
+  // --- Real-time Broadcasting Logic ---
+  const broadcastChannelRef = useRef<any>(null);
+  const lastBroadcastRef = useRef<number>(0);
+
+  useEffect(() => {
+    // Only broadcast if user is a student and has a profile
+    if (userProfile?.role === 'student' && userProfile.id) {
+        const channelName = `live_session_${userProfile.id}`;
+        const channel = supabase.channel(channelName);
+        
+        channel.subscribe(async (status) => {
+            if (status === 'SUBSCRIBED') {
+                await channel.send({
+                    type: 'broadcast',
+                    event: 'session_started',
+                    payload: {
+                        studentId: userProfile.id,
+                        studentName: userProfile.name,
+                        exerciseTitle: story.title,
+                        exerciseType: type,
+                        startedAt: new Date().toISOString()
+                    }
+                });
+            }
+        });
+
+        broadcastChannelRef.current = channel;
+
+        return () => {
+            if (broadcastChannelRef.current) {
+                // Best effort to send end event
+                broadcastChannelRef.current.send({
+                    type: 'broadcast',
+                    event: 'session_ended',
+                    payload: { studentId: userProfile.id, endedAt: new Date().toISOString() }
+                });
+                supabase.removeChannel(broadcastChannelRef.current);
+            }
+        };
+    }
+  }, [userProfile, story.title, type]);
+
+  const broadcastTyping = (questionId: string, input: string, isCorrect: boolean | null) => {
+      if (!broadcastChannelRef.current || !userProfile?.id) return;
+
+      const now = Date.now();
+      // Simple throttle: max 1 event per 500ms to avoid flooding
+      if (now - lastBroadcastRef.current > 500) {
+          // Calculate roughly progress
+          const totalQuestions = Object.keys(inputs).length > 0 ? Object.keys(inputs).length : 1; 
+          // Note: totalQuestions calculation is approximate here for simplicity
+          const progressPercentage = Math.min(100, Math.round((Object.keys(inputs).length / 10) * 10)); 
+
+          broadcastChannelRef.current.send({
+              type: 'broadcast',
+              event: 'typing',
+              payload: {
+                  studentId: userProfile.id,
+                  questionId,
+                  input,
+                  isCorrect,
+                  timestamp: now,
+                  progressPercentage
+              }
+          });
+          lastBroadcastRef.current = now;
+      }
+  };
+
   useEffect(() => {
     const types = [
       'audio/webm;codecs=opus',
@@ -64,11 +133,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
     const supported = types.find(t => MediaRecorder.isTypeSupported(t));
     if (supported) {
       setMimeType(supported);
-    }
-
-    // Debugging Log for Listening
-    if (type === ExerciseType.LISTENING) {
-        console.log('Listening Debug:', type, listeningAudioUrl);
     }
 
     return () => {
@@ -355,6 +419,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   
   const handleInputChange = (key: string, value: string) => {
     setInputs(prev => ({ ...prev, [key]: value }));
+    broadcastTyping(key, value, null); // null correctness because we don't know yet
     if (validation[key] !== undefined) {
       setValidation(prev => {
         const next = { ...prev };
@@ -374,6 +439,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
 
   const handleEmailChange = (text: string) => {
       setEmailContent(text);
+      broadcastTyping("email", text, null);
       const count = text.trim() === '' ? 0 : text.trim().split(/\s+/).length;
       setWordCount(count);
   }

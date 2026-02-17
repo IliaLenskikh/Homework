@@ -92,13 +92,12 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
 
   // Get sorted date keys (Newest dates first)
   const sortedDateKeys = Object.keys(groupedAssignments).sort((a, b) => {
-      // Assuming format DD.MM, we need to be careful with sorting across years, 
-      // but for school homework usually within a year. 
-      // Let's rely on the original assignment date order if possible or just string compare for simplicity if format is uniform.
-      // Better: finding the first assignment in the group and comparing timestamps.
+      // Find the actual date object from the first task in each group to sort correctly
       const taskA = groupedAssignments[a][0];
       const taskB = groupedAssignments[b][0];
-      return new Date(taskB.created_at).getTime() - new Date(taskA.created_at).getTime();
+      const dateA = taskA.created_at ? new Date(taskA.created_at).getTime() : 0;
+      const dateB = taskB.created_at ? new Date(taskB.created_at).getTime() : 0;
+      return dateB - dateA;
   });
 
   const activeDateGroup = selectedDateGroup ? groupedAssignments[selectedDateGroup] : [];
@@ -222,47 +221,47 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
                         <div 
                             key={dateKey}
                             onClick={() => setSelectedDateGroup(dateKey)}
-                            className="bg-white p-8 rounded-3xl shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer border border-slate-100 flex flex-col group relative overflow-hidden"
+                            className="bg-white p-8 rounded-3xl shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer border border-slate-100 flex flex-col group relative overflow-hidden h-full min-h-[200px]"
                         >
-                            <div className="absolute top-0 right-0 p-4">
+                            <div className="absolute top-6 right-6">
                                 {isAllDone ? (
-                                    <div className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center">
-                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                    <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center">
+                                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
                                     </div>
                                 ) : (
-                                    <div className="bg-slate-100 text-slate-500 text-xs font-bold px-3 py-1 rounded-full border border-slate-200">
-                                        {completedCount}/{total}
+                                    <div className={`text-xs font-bold px-3 py-1.5 rounded-lg border flex items-center gap-2 ${hasOverdue ? 'bg-rose-50 text-rose-700 border-rose-100' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                                        {hasOverdue && <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>}
+                                        {completedCount}/{total} Done
                                     </div>
                                 )}
                             </div>
 
-                            <div className={`p-4 rounded-2xl w-fit mb-4 transition-transform group-hover:scale-110 ${hasOverdue ? 'bg-rose-100 text-rose-600' : isAllDone ? 'bg-emerald-100 text-emerald-600' : 'bg-indigo-100 text-indigo-600'}`}>
-                                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+                            <div className={`p-4 rounded-2xl w-fit mb-6 transition-transform group-hover:scale-110 ${isAllDone ? 'bg-emerald-50 text-emerald-600' : hasOverdue ? 'bg-rose-50 text-rose-500' : 'bg-indigo-50 text-indigo-500'}`}>
+                                <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                             </div>
 
-                            <h3 className="text-xl font-bold text-slate-900 mb-2 group-hover:text-indigo-600 transition-colors">
-                                Homework for {dateKey}
-                            </h3>
-                            
-                            <div className="flex flex-col gap-1 text-sm font-medium mt-2">
-                                {hasOverdue && (
-                                    <span className="text-rose-500 flex items-center gap-1">
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                        {overdueCount} Overdue
-                                    </span>
-                                )}
-                                {pendingCount > 0 && (
-                                    <span className="text-slate-500">
-                                        {pendingCount} tasks pending
-                                    </span>
-                                )}
-                                {isAllDone && (
-                                    <span className="text-emerald-500">All tasks completed!</span>
-                                )}
+                            <div className="mt-auto">
+                                <h3 className="text-2xl font-extrabold text-slate-900 mb-2 group-hover:text-indigo-600 transition-colors">
+                                    Homework for {dateKey}
+                                </h3>
+                                
+                                <div className="flex flex-col gap-1 text-sm font-medium">
+                                    {hasOverdue ? (
+                                        <span className="text-rose-500 font-bold flex items-center gap-1">
+                                            {overdueCount} task{overdueCount > 1 ? 's' : ''} overdue
+                                        </span>
+                                    ) : pendingCount > 0 ? (
+                                        <span className="text-slate-500">
+                                            {pendingCount} task{pendingCount > 1 ? 's' : ''} to do
+                                        </span>
+                                    ) : (
+                                        <span className="text-emerald-500 font-bold">All tasks completed!</span>
+                                    )}
+                                </div>
                             </div>
                             
-                            <div className="mt-auto pt-6 flex items-center text-slate-400 text-xs font-bold uppercase tracking-wider group-hover:text-indigo-500 transition-colors">
-                                View Tasks <svg className="w-4 h-4 ml-1 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                            <div className="absolute bottom-6 right-6 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
+                                <svg className="w-6 h-6 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                             </div>
                         </div>
                     );
