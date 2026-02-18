@@ -30,6 +30,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   // Interview Specific State
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [isMicActive, setIsMicActive] = useState(false); 
+  const [isPaused, setIsPaused] = useState(false); // Track pause state
   const audioRef = useRef<HTMLAudioElement | null>(null);
   
   // Listening Sticky Player State
@@ -273,12 +274,14 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
 
           mediaRecorder.start();
           setIsMicActive(true);
+          setIsPaused(false);
           setRecordingError(null);
           return true;
       } catch (err: any) {
           console.error("Microphone error:", err);
           setRecordingError("Could not access microphone. Please allow permissions and try again.");
           setIsMicActive(false);
+          setIsPaused(false);
           return false;
       }
   };
@@ -289,6 +292,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       }
       stopMediaTracks();
       setIsMicActive(false);
+      setIsPaused(false);
   };
 
   // --- Specific Task Flows ---
@@ -326,20 +330,41 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       }
   };
 
-  const toggleInterviewRecording = async () => {
-      // Simpler logic: Start if not recording, Stop if recording. No pause/resume.
-      if (isMicActive) {
-          // Stop
-          stopRecordingSystem();
-      } else {
-          // Start
-          // Clear previous chunks if any? Or append? usually restart for a new answer
-          audioChunksRef.current = []; 
-          await startRecordingSystem();
+  const startInterviewRecording = async () => {
+      audioChunksRef.current = []; 
+      const started = await startRecordingSystem();
+      if (started) {
+          setTimer(0); // Optional: Count up instead? Or no timer needed for interview?
+          // Using a timer to show duration
+          if (timerRef.current) clearInterval(timerRef.current);
+          setTimer(0);
+          timerRef.current = window.setInterval(() => {
+              setTimer(t => t + 1);
+          }, 1000);
+      }
+  };
+
+  const handlePauseInterview = () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+          mediaRecorderRef.current.pause();
+          setIsPaused(true);
+          if (timerRef.current) clearInterval(timerRef.current);
+      }
+  };
+
+  const handleResumeInterview = () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
+          mediaRecorderRef.current.resume();
+          setIsPaused(false);
+          // Restart timer
+          timerRef.current = window.setInterval(() => {
+              setTimer(t => t + 1);
+          }, 1000);
       }
   };
 
   const handleFinishInterview = async () => {
+      if (timerRef.current) clearInterval(timerRef.current);
       stopRecordingSystem();
       // Wait a tiny bit for the stop event to process chunks
       setTimeout(() => handleAudioUpload(), 200);
@@ -819,44 +844,64 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                   <div className="bg-white p-10 rounded-3xl shadow-xl border border-slate-100 mb-8 text-center flex flex-col items-center">
                       <h2 className="text-2xl font-bold text-slate-900 mb-4">{story.title}</h2>
                       <p className="text-slate-500 text-sm mb-8 max-w-lg leading-relaxed">
-                          Listen to the question above, then press <b>Record</b> to answer. <br/>Press <b>Stop</b> to finish your answer and wait for the next question.
+                          Listen to the question above, then press <b>Record</b> to answer. <br/>You can <b>Pause</b> to listen or think, then <b>Resume</b> to continue answering.
                       </p>
 
                       {speakingPhase === 'UPLOADING' ? (
                           <div className="animate-pulse py-10 text-slate-500 font-bold">Saving Audio...</div>
                       ) : (
                           <div className="flex flex-col items-center justify-center gap-6 w-full">
-                              {isMicActive && (
-                                <div className="animate-pulse bg-rose-50 text-rose-600 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider border border-rose-100 shadow-sm">
-                                    RECORDING ACTIVE
-                                </div>
-                              )}
+                              {!isMicActive ? (
+                                <button 
+                                    onClick={startInterviewRecording} 
+                                    className="w-32 h-32 rounded-full flex flex-col items-center justify-center border-[6px] border-slate-100 text-rose-500 transition-all duration-300 shadow-xl hover:scale-105 active:scale-95 bg-white hover:border-rose-100"
+                                >
+                                    <div className="w-8 h-8 bg-rose-500 rounded-full shadow-sm mb-1"></div>
+                                    <span className="text-slate-400 font-bold text-[10px] uppercase tracking-widest">START</span>
+                                </button>
+                              ) : (
+                                  <div className="flex items-center gap-6 animate-fade-in-up">
+                                      {/* Pause/Resume Control */}
+                                      {isPaused ? (
+                                          <button 
+                                            onClick={handleResumeInterview}
+                                            className="w-20 h-20 rounded-full flex flex-col items-center justify-center border-4 border-indigo-200 bg-indigo-50 text-indigo-600 hover:scale-105 transition-all shadow-lg"
+                                            title="Resume Recording"
+                                          >
+                                              <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                              <span className="text-[9px] font-bold uppercase mt-1">Resume</span>
+                                          </button>
+                                      ) : (
+                                          <button 
+                                            onClick={handlePauseInterview}
+                                            className="w-20 h-20 rounded-full flex flex-col items-center justify-center border-4 border-amber-200 bg-amber-50 text-amber-600 hover:scale-105 transition-all shadow-lg"
+                                            title="Pause Recording"
+                                          >
+                                              <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                                              <span className="text-[9px] font-bold uppercase mt-1">Pause</span>
+                                          </button>
+                                      )}
 
-                              <button 
-                                onClick={toggleInterviewRecording} 
-                                className={`w-32 h-32 rounded-full flex flex-col items-center justify-center border-[6px] transition-all duration-300 shadow-xl hover:scale-105 active:scale-95 ${
-                                    isMicActive 
-                                        ? 'bg-rose-500 border-rose-200 shadow-rose-200' 
-                                        : 'bg-white border-slate-100 text-rose-500'
-                                }`}
-                              >
-                                  {isMicActive ? (
-                                      <div className="flex flex-col items-center gap-1">
-                                          <div className="w-8 h-8 bg-white rounded-md shadow-sm"></div>
-                                          <span className="text-white font-bold text-[10px] uppercase tracking-widest mt-1">STOP</span>
+                                      {/* Main Recording Indicator */}
+                                      <div className={`w-32 h-32 rounded-full flex flex-col items-center justify-center border-[6px] transition-all duration-500 shadow-xl ${isPaused ? 'border-amber-200 bg-amber-50' : 'border-rose-200 bg-rose-50 animate-pulse'}`}>
+                                          <div className={`text-2xl font-mono font-bold ${isPaused ? 'text-amber-600' : 'text-rose-600'}`}>
+                                              {String(Math.floor(timer/60))}:{String(timer%60).padStart(2,'0')}
+                                          </div>
+                                          <span className={`text-[10px] font-bold uppercase tracking-widest mt-1 ${isPaused ? 'text-amber-400' : 'text-rose-400'}`}>
+                                              {isPaused ? 'PAUSED' : 'RECORDING'}
+                                          </span>
                                       </div>
-                                  ) : (
-                                      <div className="flex flex-col items-center gap-1">
-                                          <div className="w-8 h-8 bg-rose-500 rounded-full shadow-sm"></div>
-                                          <span className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mt-1">RECORD</span>
-                                      </div>
-                                  )}
-                              </button>
 
-                              {audioChunksRef.current.length > 0 && !isMicActive && (
-                                  <button onClick={handleFinishInterview} className="bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-2 rounded-xl font-bold transition-all shadow-md">
-                                      Submit Answer
-                                  </button>
+                                      {/* Finish Button */}
+                                      <button 
+                                        onClick={handleFinishInterview}
+                                        className="w-20 h-20 rounded-full flex flex-col items-center justify-center border-4 border-emerald-200 bg-emerald-50 text-emerald-600 hover:scale-105 transition-all shadow-lg"
+                                        title="Finish & Save"
+                                      >
+                                          <div className="w-6 h-6 bg-emerald-600 rounded-md shadow-sm mb-1"></div>
+                                          <span className="text-[9px] font-bold uppercase">Finish</span>
+                                      </button>
+                                  </div>
                               )}
                           </div>
                       )}
