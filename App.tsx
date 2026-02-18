@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Story, 
@@ -14,6 +13,7 @@ import ExerciseCard from './components/ExerciseCard';
 import ExerciseView from './components/ExerciseView';
 import StudentHomeworkView from './components/StudentHomeworkView';
 import HomeworkModal from './components/HomeworkModal';
+import TeacherDashboard from './components/TeacherDashboard';
 import { grammarStories } from './data/grammar';
 import { vocabStories } from './data/vocabulary';
 import { readingStories } from './data/reading';
@@ -54,7 +54,6 @@ enum ViewState {
   WRITING_LIST,
   EXERCISE,
   HOMEWORK_LIST,
-  TEACHER_DASHBOARD, 
 }
 
 interface TrackedStudent {
@@ -111,19 +110,11 @@ export default function App() {
   
   // Teacher Dashboard State
   const [trackedStudents, setTrackedStudents] = useState<TrackedStudent[]>([]);
-  const [studentEmailInput, setStudentEmailInput] = useState('');
-  const [studentAddError, setStudentAddError] = useState<string | null>(null);
-  const [selectedStudentForView, setSelectedStudentForView] = useState<TrackedStudent | null>(null);
-  const [studentResults, setStudentResults] = useState<StudentResult[]>([]);
-  const [resultDetail, setResultDetail] = useState<StudentResult | null>(null);
   const [studentHomework, setStudentHomework] = useState<HomeworkAssignment[]>([]);
   
   // New Teacher Dashboard State
-  const [dashboardTab, setDashboardTab] = useState<'LIVE_VIEW' | 'STUDENTS' | 'HOMEWORK' | 'ANALYTICS'>('STUDENTS');
   const [liveStudents, setLiveStudents] = useState<Record<string, LiveSession>>({});
-  const [expandedStudentId, setExpandedStudentId] = useState<string | null>(null);
 
-  const [checkedHomework, setCheckedHomework] = useState<any[]>([]); 
   const [selectedStudentForAssignment, setSelectedStudentForAssignment] = useState<TrackedStudent | null>(null); 
 
   // Live Session State (Teacher)
@@ -131,7 +122,6 @@ export default function App() {
   const [liveSessionCode, setLiveSessionCode] = useState<string | null>(null);
   const [sessionParticipants, setSessionParticipants] = useState<string[]>([]); 
   const [currentPushedExercise, setCurrentPushedExercise] = useState<{title: string, type: ExerciseType} | null>(null);
-  const [liveSessionPushTab, setLiveSessionPushTab] = useState<ExerciseType>(ExerciseType.GRAMMAR);
   const sessionChannelRef = useRef<any>(null); // For participant DB changes
   const liveSessionBroadcastRef = useRef<any>(null); // For pushing exercises (Teacher)
 
@@ -145,11 +135,6 @@ export default function App() {
   // Presence State
   const [onlineUsers, setOnlineUsers] = useState<Record<string, any>>({});
   
-  // Homework Modal
-  const [isHomeworkModalOpen, setIsHomeworkModalOpen] = useState(false);
-  const [studentToAssign, setStudentToAssign] = useState<TrackedStudent | null>(null);
-  const [quickAssignTask, setQuickAssignTask] = useState<{title: string, type: ExerciseType} | undefined>(undefined);
-
   // Toast State
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
 
@@ -327,39 +312,6 @@ export default function App() {
       }
   }, [userProfile.role]);
   
-  // Load All Checked Homework for Teacher Dashboard
-  const fetchAllCheckedHomework = async () => {
-      if (userProfile.role !== 'teacher' || !userProfile.id) return;
-      
-      try {
-          const { data, error } = await supabase
-              .from('homework_assignments')
-              .select('*, profiles:student_id(full_name, email)')
-              .eq('teacher_id', userProfile.id)
-              .eq('status', 'completed')
-              .order('completed_at', { ascending: false });
-              
-          if (error) throw error;
-          
-          if (data) {
-              const formatted = data.map((hw: any) => ({
-                  ...hw,
-                  studentName: hw.profiles?.full_name || 'Unknown',
-                  studentEmail: hw.profiles?.email || ''
-              }));
-              setCheckedHomework(formatted);
-          }
-      } catch (e) {
-          console.error("Error fetching checked homework:", e);
-      }
-  };
-
-  useEffect(() => {
-      if (dashboardTab === 'HOMEWORK' && userProfile.role === 'teacher') {
-          fetchAllCheckedHomework();
-      }
-  }, [dashboardTab, userProfile.role]);
-
   // LIVE SESSION FUNCTIONS (TEACHER)
   const startLiveSession = async (sessionTitle: string) => {
     if (!userProfile.id) return;
@@ -800,9 +752,6 @@ export default function App() {
       if (error) throw error;
 
       showToast(`Successfully assigned ${exercises.length} tasks!`, "success");
-      setIsHomeworkModalOpen(false); 
-      setQuickAssignTask(undefined);
-      setSelectedStudentForAssignment(null);
       
       await fetchStudentHomework(targetStudentId);
       refreshStudentStats(trackedStudents); 
@@ -904,18 +853,15 @@ export default function App() {
       }
   };
 
-  const handleAddStudent = async (e: React.FormEvent) => {
-      e.preventDefault();
-      setStudentAddError(null);
-      if (!studentEmailInput) return;
+  const handleAddStudent = async (emailToAdd: string) => {
+      if (!emailToAdd) return;
 
-      const emailToAdd = studentEmailInput.trim().toLowerCase();
-      if (trackedStudents.find(s => s.email.toLowerCase() === emailToAdd)) {
-          setStudentAddError("Student already in list.");
+      if (trackedStudents.find(s => s.email.toLowerCase() === emailToAdd.toLowerCase())) {
+          showToast("Student already in list.", "error");
           return;
       }
-      if (emailToAdd === userProfile.email?.toLowerCase()) {
-          setStudentAddError("You cannot add yourself.");
+      if (emailToAdd.toLowerCase() === userProfile.email?.toLowerCase()) {
+          showToast("You cannot add yourself.", "error");
           return;
       }
 
@@ -927,10 +873,9 @@ export default function App() {
           const newList = [...trackedStudents, studentData];
           setTrackedStudents(newList);
           localStorage.setItem('tracked_students', JSON.stringify(newList));
-          setStudentEmailInput('');
           showToast("Student added successfully", "success");
       } else {
-          setStudentAddError("Student not found. Ask them to register first.");
+          showToast("Student not found. Ask them to register first.", "error");
       }
   };
 
@@ -939,28 +884,7 @@ export default function App() {
       const newList = trackedStudents.filter(s => s.email !== emailToRemove);
       setTrackedStudents(newList);
       localStorage.setItem('tracked_students', JSON.stringify(newList));
-      if (selectedStudentForView?.email === emailToRemove) {
-          setSelectedStudentForView(null);
-          setStudentResults([]);
-      }
       showToast("Student removed", "info");
-  };
-
-  const handleSelectStudentForView = async (student: TrackedStudent) => {
-      setSelectedStudentForView(student);
-      setResultDetail(null);
-      try {
-          const { data: results } = await supabase
-            .from('student_results')
-            .select('*')
-            .eq('student_id', student.id)
-            .order('created_at', { ascending: false });
-          
-          if (results) setStudentResults(results as StudentResult[]);
-          await fetchStudentHomework(student.id);
-      } catch (err) {
-          console.error(err);
-      }
   };
 
   const fetchStudentHomework = async (studentId: string) => {
@@ -976,36 +900,6 @@ export default function App() {
     } catch (err) {
       console.error(err);
     }
-  };
-
-  const openAssignHomeworkModal = (student: TrackedStudent | null) => {
-    setStudentToAssign(student);
-    setQuickAssignTask(undefined);
-    setIsHomeworkModalOpen(true);
-  };
-
-  const startAssignmentFlow = (student: TrackedStudent) => {
-      setSelectedStudentForAssignment(student);
-      fetchStudentHomework(student.id);
-      setView(ViewState.HOME); 
-      showToast(`Assigning to ${student.name}. Select exercises.`, "info");
-  };
-
-  const assignTaskImmediately = async (storyTitle: string, exerciseType: ExerciseType) => {
-      if (!selectedStudentForAssignment) {
-          showToast("Select a student from the dashboard first.", "error");
-          return;
-      }
-      const exercises = [{ title: storyTitle, type: exerciseType }];
-      const defaultDate = new Date();
-      defaultDate.setDate(defaultDate.getDate() + 7);
-      
-      await handleAssignHomework(
-          selectedStudentForAssignment.id,
-          exercises,
-          defaultDate.toISOString().split('T')[0], 
-          "Quick assigned task"
-      );
   };
 
   const handleSettingsSave = async (e: React.FormEvent) => {
@@ -1166,43 +1060,6 @@ export default function App() {
   const progressPercentage = Math.round((totalCompleted / totalTasks) * 100) || 0;
   const pendingHomeworkCount = myHomework.filter(h => h.status === 'pending' || (h.status === 'overdue' && new Date() > new Date(h.due_date))).length;
 
-  const performanceData = useMemo(() => {
-      if (!studentResults || studentResults.length === 0) return [];
-      
-      const stats: Record<string, { totalScore: number, maxScore: number, count: number }> = {};
-      
-      studentResults.forEach(res => {
-          if (!stats[res.exercise_type]) {
-              stats[res.exercise_type] = { totalScore: 0, maxScore: 0, count: 0 };
-          }
-          stats[res.exercise_type].totalScore += res.score;
-          stats[res.exercise_type].maxScore += res.max_score;
-          stats[res.exercise_type].count += 1;
-      });
-
-      return Object.keys(stats).map(type => {
-          const data = stats[type];
-          const percentage = data.maxScore > 0 ? Math.round((data.totalScore / data.maxScore) * 100) : 0;
-          return { type: type as ExerciseType, percentage, count: data.count };
-      });
-  }, [studentResults]);
-
-  const ToastContainer = () => (
-    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2">
-      {toasts.map(t => (
-        <div key={t.id} className={`px-4 py-3 rounded-xl shadow-lg border text-sm font-bold flex items-center gap-2 animate-slide-in-right ${
-          t.type === 'success' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-          t.type === 'error' ? 'bg-rose-50 text-rose-700 border-rose-200' :
-          'bg-slate-50 text-slate-700 border-slate-200'
-        }`}>
-          {t.type === 'success' && <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>}
-          {t.type === 'error' && <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>}
-          {t.message}
-        </div>
-      ))}
-    </div>
-  );
-
   const OnlineStatusBar = () => {
       if (userProfile.role === 'teacher') {
           const onlineStudents = Object.values(onlineUsers).filter((u: any) => u.role === 'student');
@@ -1302,34 +1159,6 @@ export default function App() {
 
     return (
       <div className="max-w-7xl mx-auto px-4 py-8">
-        {selectedStudentForAssignment && (
-            <div className="bg-indigo-600 text-white px-4 py-3 rounded-xl mb-6 flex items-center justify-between shadow-lg">
-                <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 bg-white rounded-full animate-pulse"></span>
-                    <span className="font-bold">Assigning Homework to: {selectedStudentForAssignment.name}</span>
-                </div>
-                <button 
-                    onClick={() => {
-                        setSelectedStudentForAssignment(null);
-                        setStudentHomework([]); 
-                        goHome();
-                    }}
-                    className="text-indigo-200 hover:text-white text-xs font-bold uppercase tracking-wider"
-                >
-                    Cancel Assignment Mode
-                </button>
-            </div>
-        )}
-
-        {userProfile.role === 'teacher' && !selectedStudentForAssignment && (
-            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl mb-6 flex items-center gap-3 shadow-sm animate-fade-in">
-                <div className="p-1.5 bg-amber-100 rounded-full shrink-0">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                </div>
-                <span className="text-sm font-medium">Select a student from Teacher Dashboard to enable quick homework assignment.</span>
-            </div>
-        )}
-
         <div className="flex items-center mb-10 pb-6 border-b border-slate-200 justify-between">
           <div className="flex items-center">
             <button 
@@ -1348,543 +1177,22 @@ export default function App() {
         </div>
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
           {stories.map((story, idx) => {
-            let isAssigned = false;
-            let isCompleted = false;
-            
-            if (selectedStudentForAssignment) {
-                const hw = studentHomework.find(h => h.exercise_title === story.title && h.exercise_type === type);
-                if (hw) {
-                    isAssigned = true;
-                    if (hw.status === 'completed') isCompleted = true;
-                }
-            } else {
-                isCompleted = completedStories.has(story.title);
-            }
+            const isCompleted = completedStories.has(story.title);
 
             return (
-                <div key={idx} className={`relative rounded-2xl transition-all ${isAssigned && !isCompleted ? 'ring-2 ring-indigo-400 bg-indigo-50' : isCompleted && selectedStudentForAssignment ? 'ring-2 ring-emerald-400 bg-emerald-50 opacity-75' : ''}`}>
+                <div key={idx} className={`relative rounded-2xl transition-all`}>
                     <ExerciseCard 
                         story={story}
                         type={type}
                         onClick={() => startExercise(story, type, 'CATALOG')}
                         isCompleted={isCompleted}
-                        onAssign={
-                            selectedStudentForAssignment 
-                            ? () => assignTaskImmediately(story.title, type) 
-                            : undefined
-                        }
                     />
-                    {isAssigned && !isCompleted && (
-                        <div className="absolute top-2 right-2 bg-indigo-500 text-white text-[10px] uppercase font-bold px-2 py-1 rounded-md shadow-sm">
-                            Assigned
-                        </div>
-                    )}
                 </div>
             );
           })}
         </div>
       </div>
     );
-  };
-
-  const renderLiveStudentDetail = (session: LiveSession) => {
-      const activeStory = allStories.find(s => s.title === session.exerciseTitle && s.type === session.exerciseType);
-      const isIdle = Date.now() - session.lastActivity > 120000;
-
-      return (
-        <div className="animate-fade-in flex flex-col gap-6 h-full min-h-[calc(100vh-200px)]">
-           <div className="flex items-center justify-between">
-               <button 
-                  onClick={() => setExpandedStudentId(null)}
-                  className="flex items-center gap-2 text-slate-500 hover:text-indigo-600 font-bold transition-colors bg-white px-4 py-2 rounded-xl shadow-sm border border-slate-200 hover:border-indigo-200"
-               >
-                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
-                   Back to Overview
-               </button>
-               <div className="flex items-center gap-3">
-                   <h3 className="text-2xl font-extrabold text-slate-900">{session.studentName}</h3>
-                   <div className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2 ${isIdle ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                       <span className={`w-2 h-2 rounded-full ${isIdle ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'}`}></span>
-                       {isIdle ? 'Idle' : 'Live'}
-                   </div>
-               </div>
-           </div>
-
-           <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
-               <h3 className="font-bold text-lg text-slate-800 mb-4 flex items-center gap-2">
-                   Working on: <span className="text-indigo-600">{session.exerciseTitle}</span>
-               </h3>
-               
-               {activeStory ? (
-                   <div className="mt-4">
-                       {(session.exerciseType === ExerciseType.GRAMMAR || session.exerciseType === ExerciseType.VOCABULARY) && (
-                           <div className="leading-[2.5] text-lg text-slate-800">
-                               {activeStory.template.map((sentence, idx) => {
-                                   const parts = sentence.split(/\{(\d+)\}/);
-                                   return (
-                                       <span key={idx}>
-                                           {parts.map((part, partIndex) => {
-                                               if (partIndex % 2 === 0) {
-                                                   return <span key={partIndex}>{part}</span>;
-                                               } else {
-                                                   const taskIndex = parseInt(part);
-                                                   const task = activeStory.tasks[taskIndex];
-                                                   const taskId = taskIndex.toString();
-                                                   const studentAnswer = session.allAnswers[taskId] || '';
-                                                   const hasValue = studentAnswer.length > 0;
-                                                   
-                                                   return (
-                                                       <span key={partIndex} className="inline-block mx-2 relative align-middle group">
-                                                           <span className={`absolute left-0 text-[10px] font-bold tracking-wider text-indigo-500 bg-white px-1 transition-all duration-200 pointer-events-none z-10 ${hasValue ? '-top-3 opacity-100 scale-100' : 'top-2.5 opacity-0 scale-90'}`}>
-                                                               {task.word}
-                                                           </span>
-                                                           <input 
-                                                               type="text" 
-                                                               value={studentAnswer} 
-                                                               readOnly
-                                                               className="h-10 px-3 min-w-[140px] text-center font-semibold rounded-lg border-2 outline-none transition-all duration-200 bg-slate-50 border-slate-200 text-slate-800"
-                                                           />
-                                                       </span>
-                                                   );
-                                               }
-                                           })}
-                                           {' '}
-                                       </span>
-                                   );
-                                })}
-                           </div>
-                       )}
-
-                       {session.exerciseType === ExerciseType.READING && activeStory.texts && activeStory.readingAnswers && (
-                           <div className="grid gap-6">
-                               {activeStory.texts.map((textItem) => {
-                                   const studentAnswer = session.allAnswers[textItem.letter];
-                                   return (
-                                       <div key={textItem.letter} className="bg-slate-50 rounded-xl p-4 border border-slate-100">
-                                           <div className="flex items-center gap-3 mb-2">
-                                               <div className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center font-bold">{textItem.letter}</div>
-                                               <p className="text-sm text-slate-600 line-clamp-2">{textItem.content}</p>
-                                           </div>
-                                           <div className="flex justify-end gap-2 mt-2">
-                                               {activeStory.template.map((_, idx) => {
-                                                   const num = (idx + 1).toString();
-                                                   const isSelected = studentAnswer === num;
-                                                   return (
-                                                       <div key={num} className={`w-8 h-8 rounded-lg text-sm font-bold flex items-center justify-center border-2 ${isSelected ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-400 border-slate-200'}`}>
-                                                           {num}
-                                                       </div>
-                                                   )
-                                               })}
-                                           </div>
-                                       </div>
-                                   )
-                               })}
-                           </div>
-                       )}
-
-                       {!((session.exerciseType === ExerciseType.GRAMMAR || session.exerciseType === ExerciseType.VOCABULARY) || (session.exerciseType === ExerciseType.READING && activeStory.texts)) && (
-                           <div className="bg-slate-50 p-6 rounded-xl text-slate-500 text-center">
-                               Visualization for this exercise type is currently simplified.
-                               <div className="mt-4 text-left font-mono bg-white p-4 rounded border text-xs overflow-auto max-h-60">
-                                   {JSON.stringify(session.allAnswers, null, 2)}
-                               </div>
-                           </div>
-                       )}
-                   </div>
-               ) : (
-                   <div className="text-slate-400">Exercise data not found locally.</div>
-               )}
-           </div>
-        </div>
-      );
-  };
-
-  const renderTeacherDashboard = () => {
-      const activeSessions: LiveSession[] = Object.values(liveStudents);
-
-      const allCategoriesForPush = [
-        { type: ExerciseType.GRAMMAR, stories: grammarStories, label: 'Grammar' },
-        { type: ExerciseType.VOCABULARY, stories: vocabStories, label: 'Vocabulary' },
-        { type: ExerciseType.READING, stories: [...readingStories, ...readingTrueFalseStories], label: 'Reading' },
-        { type: ExerciseType.LISTENING, stories: listeningStories, label: 'Listening' },
-        { type: ExerciseType.SPEAKING, stories: speakingStories, label: 'Read Aloud' },
-        { type: ExerciseType.ORAL_SPEECH, stories: [...oralStories, ...monologueStories], label: 'Speaking' },
-        { type: ExerciseType.WRITING, stories: writingStories, label: 'Writing' },
-      ];
-
-      return (
-      <div className="flex-1 flex flex-col md:flex-row h-full">
-          <div className="w-full md:w-64 bg-white/95 backdrop-blur-sm border-r border-slate-200 flex flex-col h-full sticky top-0">
-              <div className="p-6 border-b border-slate-100">
-                  <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-                      <svg className="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-                      Teacher
-                  </h2>
-              </div>
-              
-              <div className="flex-1 flex flex-col gap-1 p-3">
-                  <button 
-                    onClick={() => setDashboardTab('LIVE_VIEW')}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all ${dashboardTab === 'LIVE_VIEW' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'}`}
-                  >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                      Live View
-                      {activeSessions.length > 0 && <span className="ml-auto bg-rose-500 text-white text-[10px] px-2 py-0.5 rounded-full">{activeSessions.length}</span>}
-                  </button>
-                  <button 
-                    onClick={() => setDashboardTab('STUDENTS')}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all ${dashboardTab === 'STUDENTS' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'}`}
-                  >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-                      Students
-                  </button>
-                  <button 
-                    onClick={() => setDashboardTab('HOMEWORK')}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all ${dashboardTab === 'HOMEWORK' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'}`}
-                  >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
-                      Homework
-                  </button>
-                  <button 
-                    onClick={() => setDashboardTab('ANALYTICS')}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all ${dashboardTab === 'ANALYTICS' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'}`}
-                  >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
-                      Analytics
-                  </button>
-              </div>
-
-              <div className="p-4 border-t border-slate-100 flex flex-col gap-2">
-                  <button onClick={() => setView(ViewState.SETTINGS)} className="flex items-center gap-2 text-sm text-slate-500 hover:text-indigo-600 px-2 py-2 rounded hover:bg-slate-50 transition-colors w-full">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                      Settings
-                  </button>
-              </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-6 md:p-10">
-              
-              {dashboardTab === 'LIVE_VIEW' && (
-                  <div>
-                      <h2 className="text-2xl font-bold text-slate-900 mb-6">Live Classroom</h2>
-                      
-                      {!liveSessionActive ? (
-                        <div className="bg-white rounded-2xl p-8 border-2 border-dashed border-slate-200 text-center mb-8">
-                          <h3 className="text-xl font-bold text-slate-800 mb-4">Start Live Classroom Session</h3>
-                          <p className="text-slate-500 mb-6">Push exercises to students in real-time and monitor their progress</p>
-                          <button 
-                            onClick={() => startLiveSession("Live Class " + new Date().toLocaleTimeString())}
-                            disabled={loading}
-                            className="bg-indigo-600 text-white px-8 py-4 rounded-xl font-bold shadow-lg hover:bg-indigo-700 transition-all disabled:opacity-50"
-                          >
-                            {loading ? "Starting..." : "Start Live Session"}
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="space-y-6 mb-8">
-                          <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-6 rounded-2xl shadow-xl">
-                            <div className="flex justify-between items-center">
-                              <div>
-                                <h3 className="text-2xl font-bold mb-2">Live Session Active</h3>
-                                <p className="text-indigo-100">Session Code: <span className="font-mono text-2xl font-black tracking-wider bg-white/20 px-2 py-1 rounded ml-2">{liveSessionCode}</span></p>
-                                <p className="text-indigo-100 text-sm mt-1">{sessionParticipants.length} students connected</p>
-                              </div>
-                              <button 
-                                onClick={endLiveSession}
-                                className="bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg font-bold backdrop-blur"
-                              >
-                                End Session
-                              </button>
-                            </div>
-                          </div>
-
-                          {!expandedStudentId && (
-                            <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
-                              <h4 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-                                  <svg className="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
-                                  Push Exercise to Students
-                              </h4>
-                              
-                              <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
-                                  {allCategoriesForPush.map(cat => (
-                                      <button
-                                          key={cat.type}
-                                          onClick={() => setLiveSessionPushTab(cat.type)}
-                                          className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${
-                                              liveSessionPushTab === cat.type 
-                                              ? 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200' 
-                                              : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
-                                          }`}
-                                      >
-                                          {cat.label}
-                                      </button>
-                                  ))}
-                              </div>
-
-                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
-                                {allCategoriesForPush.find(c => c.type === liveSessionPushTab)?.stories.map((story, idx) => (
-                                  <div key={idx} className="border border-slate-100 rounded-xl p-3 hover:border-indigo-300 transition-all group bg-slate-50/50 hover:bg-white">
-                                    <h5 className="font-bold text-sm text-slate-800 mb-1 line-clamp-1">{story.title}</h5>
-                                    <p className="text-[10px] text-slate-400 mb-2 line-clamp-1">{story.text?.substring(0, 40) || story.template?.[0]?.substring(0, 40) || "Exercise..."}</p>
-                                    <button 
-                                      onClick={() => pushExerciseToStudents(story.title, liveSessionPushTab)}
-                                      className="w-full bg-white border border-indigo-200 text-indigo-600 py-1.5 rounded-lg text-xs font-bold mt-1 hover:bg-indigo-600 hover:text-white transition-all flex items-center justify-center gap-2 group-hover:shadow-md"
-                                    >
-                                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                                      </svg>
-                                      Push Now
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {expandedStudentId && liveStudents[expandedStudentId] ? (
-                          renderLiveStudentDetail(liveStudents[expandedStudentId])
-                      ) : (
-                          <>
-                            <h4 className="font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2 flex justify-between items-center">
-                                <span>Student Activity</span>
-                                <span className="text-xs font-normal text-slate-400">Click a card to expand</span>
-                            </h4>
-                            
-                            {activeSessions.length === 0 ? (
-                                <div className="text-center py-12 bg-white/50 backdrop-blur rounded-3xl border-2 border-dashed border-slate-200">
-                                    <div className="text-4xl mb-4 text-slate-300">📡</div>
-                                    <h3 className="text-lg font-bold text-slate-400">Waiting for activity...</h3>
-                                    <p className="text-slate-400 text-sm mt-1">Students progress will appear here.</p>
-                                </div>
-                            ) : (
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                    {activeSessions.map((session: LiveSession) => {
-                                        const isIdle = Date.now() - session.lastActivity > 120000;
-                                        return (
-                                            <div 
-                                                key={session.studentId} 
-                                                onClick={() => setExpandedStudentId(session.studentId)}
-                                                className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 hover:shadow-md hover:border-indigo-300 transition-all cursor-pointer h-48 flex flex-col justify-between group"
-                                            >
-                                                <div className="flex justify-between items-start">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm border border-indigo-100 group-hover:bg-indigo-100 transition-colors">
-                                                            {session.studentName.substring(0,2).toUpperCase()}
-                                                        </div>
-                                                        <div>
-                                                            <h4 className="font-bold text-slate-800 leading-none truncate max-w-[120px]">{session.studentName}</h4>
-                                                            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{session.exerciseType}</span>
-                                                        </div>
-                                                    </div>
-                                                    <div className={`w-2.5 h-2.5 rounded-full ${isIdle ? 'bg-amber-400' : 'bg-emerald-500 animate-pulse'}`}></div>
-                                                </div>
-                                                
-                                                <div className="mt-2">
-                                                    <div className="text-sm font-medium text-slate-600 line-clamp-1" title={session.exerciseTitle}>
-                                                        {session.exerciseTitle}
-                                                    </div>
-                                                </div>
-
-                                                <div className={`mt-auto p-3 rounded-lg border text-xs font-mono transition-colors ${
-                                                    session.isCorrect === true ? 'bg-emerald-50 border-emerald-100 text-emerald-800' :
-                                                    session.isCorrect === false ? 'bg-rose-50 border-rose-100 text-rose-800' :
-                                                    'bg-slate-50 border-slate-100 text-slate-600 group-hover:bg-white'
-                                                }`}>
-                                                    <div className="text-[10px] font-bold opacity-50 uppercase mb-1">Live Input:</div>
-                                                    <div className="truncate h-4">
-                                                        {session.userInput || <span className="opacity-40 italic">Typing...</span>}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                          </>
-                      )}
-                  </div>
-              )}
-
-              {dashboardTab === 'STUDENTS' && (
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                      <div className="lg:col-span-1 bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col h-[calc(100vh-100px)]">
-                          <div className="p-4 border-b border-slate-100">
-                              <h3 className="font-bold text-slate-800 mb-2">Tracked Students</h3>
-                              <div className="flex gap-2">
-                                  <input 
-                                      type="text" 
-                                      placeholder="Add email..." 
-                                      className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500"
-                                      value={studentEmailInput}
-                                      onChange={(e) => setStudentEmailInput(e.target.value)}
-                                  />
-                                  <button onClick={handleAddStudent} className="bg-indigo-600 text-white px-3 rounded-lg font-bold hover:bg-indigo-700">+</button>
-                              </div>
-                              {studentAddError && <p className="text-xs text-rose-500 mt-1">{studentAddError}</p>}
-                          </div>
-                          <div className="flex-1 overflow-y-auto">
-                              {trackedStudents.length === 0 ? (
-                                  <div className="p-6 text-center text-slate-400 text-sm">No students tracked yet.</div>
-                              ) : (
-                                  trackedStudents.map(student => (
-                                      <div 
-                                          key={student.id}
-                                          onClick={() => handleSelectStudentForView(student)}
-                                          className={`p-4 border-b border-slate-50 cursor-pointer hover:bg-slate-50 transition-all ${selectedStudentForView?.id === student.id ? 'bg-indigo-50 border-l-4 border-l-indigo-500' : ''}`}
-                                      >
-                                          <div className="flex justify-between items-center mb-1">
-                                              <span className="font-bold text-slate-800">{student.name}</span>
-                                              {Object.values(onlineUsers).some((u:any) => u.id === student.id) && (
-                                                  <span className="w-2 h-2 bg-emerald-500 rounded-full"></span>
-                                              )}
-                                          </div>
-                                          <div className="text-xs text-slate-500">{student.email}</div>
-                                          
-                                          <div className="flex gap-2 mt-3">
-                                              <button 
-                                                  onClick={(e) => { e.stopPropagation(); startAssignmentFlow(student); }}
-                                                  className="bg-white border border-indigo-200 text-indigo-600 px-3 rounded-lg text-xs font-bold hover:bg-indigo-50 transition-colors"
-                                              >
-                                                  Assign Homework
-                                              </button>
-                                              <button 
-                                                  onClick={(e) => { e.stopPropagation(); handleRemoveStudent(student.email); }}
-                                                  className="text-slate-300 hover:text-rose-400 px-2"
-                                              >
-                                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                              </button>
-                                          </div>
-                                      </div>
-                                  ))
-                              )}
-                          </div>
-                      </div>
-
-                      <div className="lg:col-span-2">
-                          {selectedStudentForView ? (
-                              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 h-full min-h-[500px]">
-                                  <div className="flex justify-between items-start mb-6">
-                                      <div>
-                                          <h2 className="text-2xl font-extrabold text-slate-900">{selectedStudentForView.name}</h2>
-                                          <p className="text-slate-500">{selectedStudentForView.email}</p>
-                                      </div>
-                                      <div className="text-right">
-                                          <div className="text-2xl font-bold text-indigo-600">{studentResults.length}</div>
-                                          <div className="text-xs text-slate-400 uppercase font-bold">Total Attempts</div>
-                                      </div>
-                                  </div>
-
-                                  <h3 className="font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">Recent Activity</h3>
-                                  <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-                                      {studentResults.length === 0 ? (
-                                          <p className="text-slate-400 text-sm">No activity recorded.</p>
-                                      ) : (
-                                          studentResults.map(res => (
-                                              <div key={res.id} onClick={() => setResultDetail(res)} className="p-3 rounded-xl border border-slate-100 hover:border-indigo-200 cursor-pointer transition-all bg-slate-50 hover:bg-white group">
-                                                  <div className="flex justify-between items-center mb-1">
-                                                      <span className="font-bold text-slate-700 group-hover:text-indigo-700 transition-colors">{res.exercise_title}</span>
-                                                      <span className={`text-xs font-bold px-2 py-0.5 rounded ${res.score / res.max_score >= 0.8 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                                                          {res.score}/{res.max_score}
-                                                      </span>
-                                                  </div>
-                                                  <div className="flex justify-between text-xs text-slate-400">
-                                                      <span>{res.exercise_type}</span>
-                                                      <span>{new Date(res.created_at).toLocaleDateString()}</span>
-                                                  </div>
-                                              </div>
-                                          ))
-                                      )}
-                                  </div>
-                                  
-                                  {resultDetail && (
-                                      <div className="mt-6 border-t border-slate-100 pt-6 animate-fade-in">
-                                          <h4 className="font-bold text-slate-800 mb-4">Attempt Details: {resultDetail.exercise_title}</h4>
-                                          <div className="space-y-4">
-                                              {resultDetail.details?.map((det, idx) => (
-                                                  <div key={idx} className={`p-3 rounded-lg border text-sm ${det.isCorrect ? 'bg-emerald-50 border-emerald-100' : 'bg-rose-50 border-rose-100'}`}>
-                                                      <p className="font-bold text-slate-700 mb-1">{det.question}</p>
-                                                      <div className="flex justify-between items-center">
-                                                          <span className={det.isCorrect ? 'text-emerald-600' : 'text-rose-600'}>{det.userAnswer || '(Empty)'}</span>
-                                                          {!det.isCorrect && <span className="text-slate-400 text-xs">Correct: {det.correctAnswer}</span>}
-                                                      </div>
-                                                      {det.audioUrl && (
-                                                          <audio controls src={det.audioUrl} className="mt-2 w-full h-8" />
-                                                      )}
-                                                  </div>
-                                              ))}
-                                          </div>
-                                      </div>
-                                  )}
-                              </div>
-                          ) : (
-                              <div className="h-full flex flex-col items-center justify-center text-slate-300 border-2 border-dashed border-slate-200 rounded-2xl bg-white/50">
-                                  <svg className="w-16 h-16 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
-                                  <p>Select a student to view details</p>
-                              </div>
-                          )}
-                      </div>
-                  </div>
-              )}
-
-              {dashboardTab === 'HOMEWORK' && (
-                  <div>
-                      <div className="flex justify-between items-center mb-6">
-                          <h2 className="text-2xl font-bold text-slate-900">Checked Homework</h2>
-                      </div>
-                      
-                      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                          {checkedHomework.length === 0 ? (
-                              <div className="p-10 text-center text-slate-400">
-                                  No completed homework assignments found.
-                              </div>
-                          ) : (
-                              <div className="divide-y divide-slate-100">
-                                  {checkedHomework.map((hw) => (
-                                      <div key={hw.id} className="p-4 hover:bg-slate-50 transition-colors flex items-center justify-between group">
-                                          <div className="flex items-center gap-4">
-                                              <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold">
-                                                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                                              </div>
-                                              <div>
-                                                  <div className="font-bold text-slate-800">{hw.exercise_title}</div>
-                                                  <div className="text-xs text-slate-500 flex gap-2">
-                                                      <span>Student: <span className="font-semibold text-indigo-600">{hw.studentName}</span></span>
-                                                      <span>•</span>
-                                                      <span>{new Date(hw.completed_at).toLocaleDateString()}</span>
-                                                  </div>
-                                              </div>
-                                          </div>
-                                          <div className="text-right">
-                                              <div className="text-lg font-bold text-emerald-600">
-                                                  {hw.score} <span className="text-slate-400 text-sm font-normal">/ {hw.max_score}</span>
-                                              </div>
-                                              <button 
-                                                  className="text-xs text-indigo-500 font-bold opacity-0 group-hover:opacity-100 transition-opacity"
-                                                  onClick={() => {}}
-                                              >
-                                                  View Details
-                                              </button>
-                                          </div>
-                                      </div>
-                                  ))}
-                              </div>
-                          )}
-                      </div>
-                  </div>
-              )}
-
-              {dashboardTab === 'ANALYTICS' && (
-                  <div className="text-center py-20">
-                      <div className="text-6xl mb-4">📊</div>
-                      <h2 className="text-2xl font-bold text-slate-800">Analytics Dashboard</h2>
-                      <p className="text-slate-500 mt-2">Detailed class performance metrics coming soon.</p>
-                  </div>
-              )}
-          </div>
-      </div>
-      );
   };
 
   const learningBackground = {
@@ -1900,17 +1208,20 @@ export default function App() {
   return (
       <div className="min-h-screen flex flex-col font-sans text-slate-900 bg-slate-50 relative overflow-hidden" style={learningBackground}>
           <OnlineStatusBar />
-          <HomeworkModal 
-            isOpen={isHomeworkModalOpen} 
-            studentName={studentToAssign?.name} 
-            initialStudentId={studentToAssign?.id}
-            students={trackedStudentsWithStatus}
-            preSelectedTask={quickAssignTask}
-            onClose={() => setIsHomeworkModalOpen(false)}
-            onAssign={handleAssignHomework}
-            loading={loading}
-          />
-          <ToastContainer />
+          
+          <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+            {toasts.map(t => (
+                <div key={t.id} className={`pointer-events-auto px-4 py-3 rounded-xl shadow-lg border text-sm font-bold flex items-center gap-2 animate-fade-in-up ${
+                    t.type === 'success' ? 'bg-emerald-50 text-emerald-700 border-emerald-100' :
+                    t.type === 'error' ? 'bg-rose-50 text-rose-700 border-rose-100' :
+                    'bg-white text-slate-700 border-slate-100'
+                }`}>
+                    {t.type === 'success' && <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>}
+                    {t.type === 'error' && <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>}
+                    {t.message}
+                </div>
+            ))}
+          </div>
           
           <div className="flex-1 overflow-y-auto relative z-10 flex flex-col">
             {view === ViewState.HOME && userProfile.role === 'student' && !selectedStory && (
@@ -2135,42 +1446,6 @@ export default function App() {
               </div>
             )}
 
-            {view === ViewState.FORGOT_PASSWORD && (
-              <div className="flex items-center justify-center min-h-[calc(100vh-60px)] p-4">
-                <div className="bg-white p-8 md:p-12 rounded-3xl shadow-xl w-full max-w-md border border-slate-100 text-center">
-                  <h2 className="text-2xl font-bold text-slate-900 mb-2">Reset Password</h2>
-                  <p className="text-slate-500 mb-8 text-sm">Enter your email to receive a reset link</p>
-                  
-                  {authSuccessMsg ? (
-                      <div className="bg-emerald-50 text-emerald-600 p-4 rounded-xl mb-6 text-sm border border-emerald-100">
-                          {authSuccessMsg}
-                      </div>
-                  ) : (
-                      <form onSubmit={handlePasswordReset} className="space-y-4">
-                          <input 
-                              type="email" 
-                              placeholder="Email" 
-                              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none"
-                              value={email}
-                              onChange={(e) => setEmail(e.target.value)}
-                              required
-                          />
-                          <button 
-                              type="submit" 
-                              disabled={loading}
-                              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl transition-all"
-                          >
-                              {loading ? 'Sending...' : 'Send Reset Link'}
-                          </button>
-                      </form>
-                  )}
-                  <button onClick={() => setView(ViewState.REGISTRATION)} className="mt-6 text-slate-400 hover:text-slate-600 text-sm font-bold">
-                      Back to Login
-                  </button>
-                </div>
-              </div>
-            )}
-
             {view === ViewState.ROLE_SELECTION && (
                 <div className="flex items-center justify-center min-h-[calc(100vh-60px)] p-4">
                     <div className="bg-white p-10 rounded-3xl shadow-xl w-full max-w-lg border border-slate-100 text-center">
@@ -2273,7 +1548,24 @@ export default function App() {
               </div>
             )}
 
-            {view === ViewState.HOME && userProfile.role === 'teacher' && !selectedStudentForAssignment && renderTeacherDashboard()}
+            {view === ViewState.HOME && userProfile.role === 'teacher' && !selectedStudentForAssignment && (
+                <TeacherDashboard 
+                    userProfile={userProfile}
+                    trackedStudents={trackedStudentsWithStatus}
+                    onAddStudent={handleAddStudent}
+                    onRemoveStudent={handleRemoveStudent}
+                    liveStudents={liveStudents}
+                    onlineUsers={onlineUsers}
+                    onStartLiveSession={startLiveSession}
+                    onEndLiveSession={endLiveSession}
+                    onPushExercise={pushExerciseToStudents}
+                    liveSessionActive={liveSessionActive}
+                    liveSessionCode={liveSessionCode}
+                    sessionParticipants={sessionParticipants}
+                    loading={loading}
+                    onAssignHomework={handleAssignHomework}
+                />
+            )}
 
             {view === ViewState.GRAMMAR_LIST && renderList(grammarStories, ExerciseType.GRAMMAR)}
             {view === ViewState.VOCAB_LIST && renderList(vocabStories, ExerciseType.VOCABULARY)}
@@ -2304,7 +1596,7 @@ export default function App() {
             )}
           </div>
 
-          {userProfile.role && view !== ViewState.SETTINGS && view !== ViewState.EXERCISE && view !== ViewState.REGISTRATION && view !== ViewState.FORGOT_PASSWORD && view !== ViewState.ROLE_SELECTION && (
+          {userProfile.role && view !== ViewState.SETTINGS && view !== ViewState.EXERCISE && view !== ViewState.REGISTRATION && view !== ViewState.FORGOT_PASSWORD && view !== ViewState.ROLE_SELECTION && view !== ViewState.HOME && (
              <div className="fixed bottom-6 left-6 z-50">
                  <button 
                     onClick={() => setView(ViewState.SETTINGS)}

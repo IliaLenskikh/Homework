@@ -106,6 +106,15 @@ export interface AttemptDetail {
   audioUrl?: string; // URL to the recorded audio
 }
 
+export interface TeacherFeedback {
+  id: string;
+  attempt_id: string;
+  teacher_id: string;
+  feedback_text: string;
+  audio_score?: number;
+  created_at: string;
+}
+
 export interface StudentResult {
   id: string;
   student_id: string;
@@ -115,6 +124,9 @@ export interface StudentResult {
   max_score: number;
   details: AttemptDetail[];
   created_at: string;
+  feedback?: TeacherFeedback; // Optional joined feedback
+  student_name?: string; // For dashboard display
+  student_email?: string; // For dashboard display
 }
 
 export interface HomeworkAssignment {

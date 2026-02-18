@@ -69,6 +69,11 @@ create policy "Students update own homework"
   on public.homework_assignments for update 
   using ( auth.uid() = student_id );
 
+drop policy if exists "Teachers update homework" on public.homework_assignments;
+create policy "Teachers update homework" 
+  on public.homework_assignments for update 
+  using ( auth.uid() = teacher_id );
+
 -- 3. Student Results Table (History of attempts)
 create table if not exists public.student_results (
   id uuid default gen_random_uuid() primary key,
@@ -76,8 +81,8 @@ create table if not exists public.student_results (
   student_id uuid references public.profiles(id) not null,
   exercise_title text not null,
   exercise_type text not null,
-  score int not null,
-  max_score int not null,
+  score int,
+  max_score int,
   details jsonb -- Stores the detailed Q&A for the attempt
 );
 
@@ -85,17 +90,54 @@ create table if not exists public.student_results (
 alter table public.student_results enable row level security;
 
 -- Policies for Results
-drop policy if exists "Everyone view results" on public.student_results;
-create policy "Everyone view results" 
+drop policy if exists "View Results Policy" on public.student_results;
+create policy "View Results Policy" 
   on public.student_results for select 
-  using ( true );
+  using ( 
+    -- Student sees their own
+    auth.uid() = student_id 
+    OR 
+    -- Teacher sees their students' results (based on profile linkage)
+    exists (
+      select 1 from public.profiles student_prof
+      where student_prof.id = student_results.student_id
+      and student_prof.teacher_email = (select email from public.profiles where id = auth.uid())
+    )
+  );
 
 drop policy if exists "Students insert results" on public.student_results;
 create policy "Students insert results" 
   on public.student_results for insert 
   with check ( auth.uid() = student_id );
 
--- 4. Storage Bucket for Audio (Speaking Tasks)
+-- 4. Teacher Feedback Table (NEW)
+create table if not exists public.teacher_feedback (
+  id uuid default gen_random_uuid() primary key,
+  attempt_id uuid references public.student_results(id) on delete cascade not null,
+  teacher_id uuid references public.profiles(id) not null,
+  feedback_text text,
+  audio_score int,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+alter table public.teacher_feedback enable row level security;
+
+drop policy if exists "Feedback Access Policy" on public.teacher_feedback;
+create policy "Feedback Access Policy"
+  on public.teacher_feedback for all
+  using (
+    -- Teachers can manage their own feedback
+    auth.uid() = teacher_id
+    OR
+    -- Students can view feedback on their attempts
+    exists (
+      select 1 from public.student_results sr
+      where sr.id = teacher_feedback.attempt_id
+      and sr.student_id = auth.uid()
+    )
+  );
+
+-- 5. Storage Bucket for Audio (Speaking Tasks)
 insert into storage.buckets (id, name, public) 
 values ('audio-responses', 'audio-responses', true)
 on conflict (id) do nothing;
@@ -111,7 +153,7 @@ create policy "Authenticated Users Upload Audio"
   on storage.objects for insert 
   with check ( bucket_id = 'audio-responses' and auth.role() = 'authenticated' );
 
--- 5. Live Classroom Sessions
+-- 6. Live Classroom Sessions
 create table if not exists public.live_classroom_sessions (
   id uuid default gen_random_uuid() primary key,
   teacher_id uuid references public.profiles(id) not null,
@@ -140,7 +182,7 @@ create policy "Students can view active sessions"
   for select
   using ( status IN ('waiting', 'active') );
 
--- 6. Session Participants
+-- 7. Session Participants
 create table if not exists public.session_participants (
   id uuid default gen_random_uuid() primary key,
   session_id uuid references public.live_classroom_sessions(id) on delete cascade not null,
