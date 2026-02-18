@@ -13,6 +13,22 @@ interface ExerciseViewProps {
 }
 
 const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComplete, userProfile }) => {
+  // --- Safety Guard: Ensure story exists ---
+  if (!story) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] p-8 text-center">
+        <div className="bg-rose-50 text-rose-600 p-6 rounded-2xl border border-rose-100 shadow-sm max-w-md">
+          <svg className="w-12 h-12 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" /></svg>
+          <h3 className="text-lg font-bold mb-2">Exercise Data Missing</h3>
+          <p className="text-sm mb-6">We couldn't load the details for this exercise. It might have been removed or there was a connection error.</p>
+          <button onClick={onBack} className="bg-rose-600 text-white px-4 py-2 rounded-xl font-bold hover:bg-rose-700 transition-colors">
+            Go Back
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const [inputs, setInputs] = useState<UserProgress>({});
   const [validation, setValidation] = useState<ValidationState>({});
   const [showResults, setShowResults] = useState(false);
@@ -41,7 +57,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
 
   // Derive listening audio URL directly from story, independent of type
   const listeningAudioUrl = useMemo(() => {
-      // Prioritize parent audioUrl if available (for single-file exams)
+      // Safe access for nested properties
       return story.audioUrl || story.subStories?.[0]?.audioUrl || null;
   }, [story]);
 
@@ -64,23 +80,26 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
 
   useEffect(() => {
     // Only broadcast if user is a student and has a profile
-    if (userProfile?.role === 'student' && userProfile.id) {
-        // ✅ Using shared channel for efficiency
+    if (typeof window !== 'undefined' && userProfile?.role === 'student' && userProfile.id) {
         const channel = supabase.channel('live_sessions_all');
         
         channel.subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
-                await channel.send({
-                    type: 'broadcast',
-                    event: `student_${userProfile.id}_started`,
-                    payload: {
-                        studentId: userProfile.id,
-                        studentName: userProfile.name,
-                        exerciseTitle: story.title,
-                        exerciseType: type,
-                        startedAt: new Date().toISOString()
-                    }
-                });
+                try {
+                    await channel.send({
+                        type: 'broadcast',
+                        event: `student_${userProfile.id}_started`,
+                        payload: {
+                            studentId: userProfile.id,
+                            studentName: userProfile.name,
+                            exerciseTitle: story.title,
+                            exerciseType: type,
+                            startedAt: new Date().toISOString()
+                        }
+                    });
+                } catch (e) {
+                    console.error("Failed to broadcast start", e);
+                }
             }
         });
 
@@ -88,37 +107,45 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
 
         return () => {
             if (broadcastChannelRef.current) {
-                broadcastChannelRef.current.send({
-                    type: 'broadcast',
-                    event: `student_${userProfile.id}_ended`,
-                    payload: { studentId: userProfile.id, endedAt: new Date().toISOString() }
-                });
+                try {
+                    broadcastChannelRef.current.send({
+                        type: 'broadcast',
+                        event: `student_${userProfile.id}_ended`,
+                        payload: { studentId: userProfile.id, endedAt: new Date().toISOString() }
+                    });
+                } catch (e) { /* ignore cleanup errors */ }
                 supabase.removeChannel(broadcastChannelRef.current);
             }
         };
     }
   }, [userProfile, story.title, type]);
 
-  // Load writing draft
+  // Load writing draft (SSR Safe)
   useEffect(() => {
-      if (type === ExerciseType.WRITING) {
-          const draftKey = `draft_${story.title}`;
-          const saved = localStorage.getItem(draftKey);
-          if (saved) {
-              setEmailContent(saved);
-              setWordCount(saved.trim().split(/\s+/).filter(w => w.length > 0).length);
+      if (typeof window !== 'undefined' && type === ExerciseType.WRITING) {
+          try {
+            const draftKey = `draft_${story.title}`;
+            const saved = localStorage.getItem(draftKey);
+            if (saved) {
+                setEmailContent(saved);
+                setWordCount(saved.trim().split(/\s+/).filter(w => w.length > 0).length);
+            }
+          } catch (e) {
+              console.warn("LocalStorage access failed", e);
           }
       }
   }, [type, story.title]);
 
-  // Auto-save writing draft
+  // Auto-save writing draft (SSR Safe)
   useEffect(() => {
-      if (type === ExerciseType.WRITING && emailContent) {
+      if (typeof window !== 'undefined' && type === ExerciseType.WRITING && emailContent) {
           const timer = setTimeout(() => {
-              const draftKey = `draft_${story.title}`;
-              localStorage.setItem(draftKey, emailContent);
-              setLastSaved(new Date().toLocaleTimeString());
-          }, 2000); // Save after 2s of inactivity
+              try {
+                const draftKey = `draft_${story.title}`;
+                localStorage.setItem(draftKey, emailContent);
+                setLastSaved(new Date().toLocaleTimeString());
+              } catch (e) { /* ignore */ }
+          }, 2000); 
           return () => clearTimeout(timer);
       }
   }, [emailContent, type, story.title]);
@@ -127,7 +154,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       if (!broadcastChannelRef.current || !userProfile?.id) return;
 
       const now = Date.now();
-      // Simple throttle: max 1 event per 300ms to avoid flooding, but frequent enough for live feel
       if (now - lastBroadcastRef.current > 300) {
           const progressPercentage = Math.min(100, Math.round((Object.keys(allInputs).length / 10) * 10)); 
 
@@ -143,12 +169,19 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                   timestamp: now,
                   progressPercentage
               }
-          });
+          }).catch((err: any) => console.error("Broadcast typing error", err));
           lastBroadcastRef.current = now;
       }
   };
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+        setRecordingError("Audio recording is not supported in this browser. Please use a modern browser like Chrome or Firefox.");
+        return;
+    }
+
     const types = [
       'audio/webm;codecs=opus',
       'audio/webm',
@@ -156,11 +189,17 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       'audio/ogg;codecs=opus',
       'audio/wav'
     ];
-    const supported = types.find(t => MediaRecorder.isTypeSupported(t));
-    if (supported) {
-      setMimeType(supported);
-    } else {
-        setRecordingError("Audio recording not supported on this browser.");
+    
+    try {
+        const supported = types.find(t => MediaRecorder.isTypeSupported(t));
+        if (supported) {
+            setMimeType(supported);
+        } else {
+            setRecordingError("No supported audio recording format found.");
+        }
+    } catch (e) {
+        console.error("MediaRecorder check failed", e);
+        setRecordingError("Audio recording feature unavailable.");
     }
 
     return () => {
@@ -182,9 +221,14 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   // Force load audio when URL changes to prevent stale state errors
   useEffect(() => {
       if (stickyAudioRef.current && listeningAudioUrl) {
-          stickyAudioRef.current.load();
-          setAudioError(null);
-          setIsAudioPlaying(false);
+          try {
+            stickyAudioRef.current.load();
+            setAudioError(null);
+            setIsAudioPlaying(false);
+          } catch(e) {
+              console.error("Audio load error", e);
+              setAudioError("Failed to load audio source.");
+          }
       }
   }, [listeningAudioUrl]);
 
@@ -205,7 +249,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                 .catch(error => {
                   console.error("Play failed:", error);
                   setIsAudioPlaying(false);
-                  setAudioError("Playback failed. Please try again.");
+                  setAudioError("Playback failed. Please check your connection.");
               });
           }
       }
@@ -214,7 +258,9 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   const handleSeek = (seconds: number) => {
       if (!stickyAudioRef.current) return;
       const newTime = stickyAudioRef.current.currentTime + seconds;
-      stickyAudioRef.current.currentTime = Math.max(0, Math.min(newTime, stickyAudioRef.current.duration || Infinity));
+      if (!isNaN(stickyAudioRef.current.duration)) {
+          stickyAudioRef.current.currentTime = Math.max(0, Math.min(newTime, stickyAudioRef.current.duration));
+      }
   };
 
   const handleSeekToTime = (time: number) => {
@@ -251,6 +297,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   const startRecordingSystem = async () => {
       try {
           if (!mimeType) throw new Error("No supported audio type found.");
+          if (!navigator.mediaDevices) throw new Error("Audio input not supported.");
           
           const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           streamRef.current = stream;
@@ -265,13 +312,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
               }
           };
 
-          // We handle upload in the onstop event to ensure all data is captured
-          mediaRecorder.onstop = () => {
-              // Intentionally left empty here, called explicitly via handleAudioUpload when needed
-              // or we can trigger upload here if we want auto-upload on stop.
-              // For better control, we call upload separately.
-          };
-
           mediaRecorder.start();
           setIsMicActive(true);
           setIsPaused(false);
@@ -279,7 +319,11 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
           return true;
       } catch (err: any) {
           console.error("Microphone error:", err);
-          setRecordingError("Could not access microphone. Please allow permissions and try again.");
+          let msg = "Could not access microphone.";
+          if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+              msg = "Microphone permission denied. Please allow access in browser settings.";
+          }
+          setRecordingError(msg);
           setIsMicActive(false);
           setIsPaused(false);
           return false;
@@ -301,8 +345,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
     setSpeakingPhase('PREPARING');
     setTimer(90); 
     startTimer(90, () => {
-        setSpeakingPhase('IDLE'); // Ready to record state
-        // Optionally auto-start recording here, but better to let user click "Start"
+        setSpeakingPhase('IDLE'); 
     }); 
   };
 
@@ -311,7 +354,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
     if (started) {
         setSpeakingPhase('RECORDING');
         setTimer(120); 
-        startTimer(120, () => finishSpeaking(true)); // Auto finish on timeout
+        startTimer(120, () => finishSpeaking(true));
     }
   };
 
@@ -334,8 +377,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       audioChunksRef.current = []; 
       const started = await startRecordingSystem();
       if (started) {
-          setTimer(0); // Optional: Count up instead? Or no timer needed for interview?
-          // Using a timer to show duration
           if (timerRef.current) clearInterval(timerRef.current);
           setTimer(0);
           timerRef.current = window.setInterval(() => {
@@ -356,7 +397,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
           mediaRecorderRef.current.resume();
           setIsPaused(false);
-          // Restart timer
           timerRef.current = window.setInterval(() => {
               setTimer(t => t + 1);
           }, 1000);
@@ -366,17 +406,23 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   const handleFinishInterview = async () => {
       if (timerRef.current) clearInterval(timerRef.current);
       stopRecordingSystem();
-      // Wait a tiny bit for the stop event to process chunks
-      setTimeout(() => handleAudioUpload(), 200);
+      setTimeout(() => handleAudioUpload(), 500); // Increased timeout to ensure chunks are processed
   };
 
   const handleAudioUpload = async () => {
       setSpeakingPhase('UPLOADING');
       
+      // Safety check for empty recording
+      if (!audioChunksRef.current || audioChunksRef.current.length === 0) {
+          setRecordingError("Recording failed: No audio data captured. Please try again.");
+          setSpeakingPhase('IDLE');
+          return;
+      }
+
       const blob = new Blob(audioChunksRef.current, { type: mimeType });
       
-      if (blob.size === 0) {
-          setRecordingError("Recording failed: No audio data captured.");
+      if (blob.size < 100) { // Check for meaningful size
+          setRecordingError("Recording too short or empty. Please check your microphone.");
           setSpeakingPhase('IDLE');
           return;
       }
@@ -412,11 +458,10 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       } catch (e: any) {
           console.error("Upload error", e);
           setRecordingError("Failed to upload audio. Please try again.");
-          setSpeakingPhase('IDLE'); // Allow retry
+          setSpeakingPhase('IDLE'); 
           return;
       }
 
-      // Generate report
       const taskLabel = story.speakingType === 'monologue' 
         ? `Monologue: ${story.title}` 
         : story.speakingType === 'read-aloud' ? `Read Aloud: ${story.title}`
@@ -429,9 +474,9 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
 
       const details: AttemptDetail[] = [{
           question: taskLabel,
-          userAnswer: "Audio Response",
+          userAnswer: "Audio Response Recorded",
           correctAnswer: "Teacher Review",
-          isCorrect: null, // Pending review
+          isCorrect: null, 
           audioUrl: publicUrl,
           context: contextText
       }];
@@ -459,17 +504,16 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       if (timerRef.current) clearInterval(timerRef.current);
       stopRecordingSystem();
       if (autoUpload) {
-          setTimeout(handleAudioUpload, 200);
+          setTimeout(handleAudioUpload, 500);
       } else {
-          // Just go to idle, user can click finish to upload
           setSpeakingPhase('IDLE'); 
       }
   };
 
   const finishSpeaking = (autoUpload: boolean = true) => {
-    stopRecording(false); // Stop tracks
+    stopRecording(false);
     if (autoUpload) {
-        setTimeout(handleAudioUpload, 200);
+        setTimeout(handleAudioUpload, 500);
     }
   };
 
@@ -505,7 +549,6 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   const handleSubmitWriting = async () => {
     setIsSubmittingWriting(true);
     
-    // Simple validation
     if (wordCount < 30) {
         if (!confirm("Your email is very short. Are you sure you want to submit?")) {
             setIsSubmittingWriting(false);
@@ -518,19 +561,17 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
             question: 'Email Writing Task',
             userAnswer: emailContent,
             correctAnswer: 'Pending Review',
-            isCorrect: null, // Indicates it needs grading
+            isCorrect: null,
             context: story.text || story.emailBody,
             wordCount: wordCount,
         }];
 
-        // Clear local storage draft
-        localStorage.removeItem(`draft_${story.title}`);
+        if (typeof window !== 'undefined') {
+            localStorage.removeItem(`draft_${story.title}`);
+        }
         
-        // Use 0 as initial score, max score 10
         onComplete(0, 10, details);
-        
-        // Show success visual (onComplete handles redirect usually, but just in case)
-        setSpeakingPhase('FINISHED'); // Reuse state for UI feedback or similar
+        setSpeakingPhase('FINISHED'); 
     } catch (e) {
         console.error("Submission failed", e);
         alert("Failed to submit. Please try again.");
@@ -540,12 +581,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   };
 
   const checkAnswers = () => {
-    if (type === ExerciseType.WRITING) {
-        // Now handled by handleSubmitWriting directly via UI button
-        return;
-    }
-    if (type === ExerciseType.SPEAKING || type === ExerciseType.ORAL_SPEECH) {
-        // Should be handled by recording flows
+    if (type === ExerciseType.WRITING || type === ExerciseType.SPEAKING || type === ExerciseType.ORAL_SPEECH) {
         return;
     }
 
@@ -560,13 +596,13 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
             s.texts.forEach((text) => {
                 const key = prefix + text.letter;
                 const userChoice = inputs[key];
-                const correctAnswers = s.readingAnswers![text.letter];
+                const correctAnswers = s.readingAnswers![text.letter] || [];
                 const userNum = parseInt(userChoice || "-1");
                 const isCorrect = correctAnswers.includes(userNum);
                 newValidation[key] = isCorrect;
                 if (isCorrect) correctCount++;
 
-                const getHeading = (idx: number) => s.template[idx - 1] || "Unknown";
+                const getHeading = (idx: number) => s.template ? s.template[idx - 1] || "Unknown" : "Unknown";
                 attemptDetails.push({
                     question: `Item ${text.letter} (${text.content.substring(0,20)}...)`,
                     userAnswer: userNum > 0 ? `${userNum}. ${getHeading(userNum)}` : "No Answer",
@@ -585,8 +621,8 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                 newValidation[key] = isCorrect;
                 if(isCorrect) correctCount++;
 
-                const label = q.options[userVal - 1] || "No Answer";
-                const correctLabel = q.options[q.answer - 1] || "";
+                const label = q.options ? q.options[userVal - 1] || "No Answer" : "No Answer";
+                const correctLabel = q.options ? q.options[q.answer - 1] || "" : "";
                 attemptDetails.push({
                     question: q.text,
                     userAnswer: label,
@@ -690,6 +726,9 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   };
 
   const renderWritingLayout = () => {
+      // Fallback if text/body missing
+      const taskText = story.text || story.emailBody || "Write your response below.";
+      
       const wordCountClass = wordCount < 90 ? 'text-amber-500' : wordCount > 132 ? 'text-rose-500' : 'text-emerald-500';
       
       return (
@@ -698,7 +737,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex-1 flex flex-col">
                    <h3 className="font-bold text-slate-800 mb-4 text-sm uppercase tracking-wide">Task</h3>
                    <div className="prose prose-sm text-slate-600 mb-6 flex-1 overflow-y-auto custom-scrollbar">
-                      <p className="whitespace-pre-line leading-relaxed">{story.text}</p>
+                      <p className="whitespace-pre-line leading-relaxed">{taskText}</p>
                    </div>
                    
                    <div className="border-t border-slate-100 pt-4 mt-auto">
@@ -731,13 +770,13 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
 
              <div className="lg:w-2/3 order-1 lg:order-2 flex flex-col bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
                 <div className="bg-slate-50 border-b border-slate-200 px-6 py-4 flex items-center justify-between">
-                   <h2 className="text-lg font-bold text-slate-800">{story.emailSubject}</h2>
+                   <h2 className="text-lg font-bold text-slate-800">{story.emailSubject || "New Email"}</h2>
                    <span className="text-xs text-slate-400">Draft - Auto-saving</span>
                 </div>
                 <div className="flex-1 overflow-y-auto bg-white custom-scrollbar p-6">
                    <div className="mb-8 p-4 bg-slate-50 rounded-xl border border-slate-100">
                       <div className="flex justify-between items-baseline mb-2">
-                         <span className="font-bold text-slate-900">{story.emailSender}</span>
+                         <span className="font-bold text-slate-900">{story.emailSender || "Friend"}</span>
                          <span className="text-xs text-slate-400">Received recently</span>
                       </div>
                       <p className="text-slate-700 whitespace-pre-line leading-relaxed">{story.emailBody}</p>
@@ -768,7 +807,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
           return (
               <div className="max-w-3xl mx-auto py-10">
                   <div className="bg-rose-50 border border-rose-200 text-rose-700 px-6 py-4 rounded-xl flex items-center gap-3">
-                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                       <div>
                           <p className="font-bold">Microphone Error</p>
                           <p className="text-sm">{recordingError}</p>
@@ -868,7 +907,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                             className="w-20 h-20 rounded-full flex flex-col items-center justify-center border-4 border-indigo-200 bg-indigo-50 text-indigo-600 hover:scale-105 transition-all shadow-lg"
                                             title="Resume Recording"
                                           >
-                                              <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                              <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path d="M8 5v14l11-7z"/></svg>
                                               <span className="text-[9px] font-bold uppercase mt-1">Resume</span>
                                           </button>
                                       ) : (
@@ -877,7 +916,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                             className="w-20 h-20 rounded-full flex flex-col items-center justify-center border-4 border-amber-200 bg-amber-50 text-amber-600 hover:scale-105 transition-all shadow-lg"
                                             title="Pause Recording"
                                           >
-                                              <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                                              <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
                                               <span className="text-[9px] font-bold uppercase mt-1">Pause</span>
                                           </button>
                                       )}
@@ -954,7 +993,12 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
               </div>
           )
       }
-      return null;
+      
+      return (
+          <div className="p-8 text-center text-slate-500">
+              <p>Speaking Type "{subtype}" is not implemented yet.</p>
+          </div>
+      );
   }
 
   const renderSingleListeningTask = (subStory: Story, index: number) => {
@@ -977,22 +1021,22 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                           onClick={() => toggleTranscript(index)}
                           className="flex items-center gap-2 text-indigo-600 font-bold text-sm hover:bg-indigo-50 px-4 py-2 rounded-xl transition-all border border-indigo-100"
                       >
-                          <svg className={`w-4 h-4 transition-transform ${isTranscriptVisible ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                          <svg className={`w-4 h-4 transition-transform ${isTranscriptVisible ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
                           {isTranscriptVisible ? "Hide Transcript" : "Show Transcript"}
                       </button>
 
                       {isTranscriptVisible && (
                           <div className="mt-4 bg-slate-50 rounded-2xl border border-slate-200 p-6 max-h-[400px] overflow-y-auto custom-scrollbar">
                               <div className="space-y-6">
-                                  {subStory.transcript.items.map((item, iIdx) => (
+                                  {subStory.transcript.items?.map((item, iIdx) => (
                                       <div key={iIdx} className="space-y-2">
                                           <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1 border-b border-slate-200 pb-1">
                                               Part {item.text_id}
                                           </div>
-                                          {item.segments.map((seg, sIdx) => {
+                                          {item.segments?.map((seg, sIdx) => {
                                               const isActive = currentAudioTime >= seg.time && 
-                                                  (sIdx < item.segments.length - 1 
-                                                      ? currentAudioTime < item.segments[sIdx+1].time 
+                                                  (sIdx < (item.segments?.length || 0) - 1 
+                                                      ? currentAudioTime < (item.segments?.[sIdx+1]?.time || Infinity)
                                                       : currentAudioTime < item.end);
 
                                               return (
@@ -1031,7 +1075,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                       <p className="font-medium text-slate-800">{q.text}</p>
                                   </div>
                                   <div className="grid grid-cols-1 md:grid-cols-1 gap-3">
-                                      {q.options.map((opt, idx) => {
+                                      {q.options?.map((opt, idx) => {
                                           const isSelected = inputs[key] === (idx + 1).toString();
                                           const isThisCorrectOption = (idx + 1) === q.answer;
                                           let btnClass = "bg-white text-slate-600 border-slate-200 hover:border-cyan-300";
@@ -1066,7 +1110,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                   </div>
               )}
 
-              {subStory.texts && subStory.readingAnswers && (
+              {subStory.texts && subStory.readingAnswers && subStory.template && (
                   <div className="flex flex-col lg:flex-row gap-8">
                       <div className="lg:w-1/2">
                           <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 sticky top-4">
@@ -1083,7 +1127,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                       <div className="lg:w-1/2 grid gap-4">
                           {subStory.texts.map((speakerItem) => {
                               const key = prefix + speakerItem.letter;
-                              const correctAnswers = subStory.readingAnswers![speakerItem.letter];
+                              const correctAnswers = subStory.readingAnswers![speakerItem.letter] || [];
 
                               return (
                                   <div key={speakerItem.letter} className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">
@@ -1227,26 +1271,26 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                         
                         <div className="flex items-center gap-4 md:gap-6 order-2 md:order-1">
                             <button onClick={() => handleSeek(-15)} className="p-2 rounded-full hover:bg-slate-100 text-slate-500 font-bold text-xs flex flex-col items-center gap-1 transition-colors">
-                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" /></svg>
                                 -15s
                             </button>
                             <button onClick={() => handleSeek(-5)} className="p-2 rounded-full hover:bg-slate-100 text-slate-500 font-bold text-xs flex flex-col items-center gap-1 transition-colors">
-                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
                                 -5s
                             </button>
                             <button onClick={handlePlayPause} className="w-16 h-16 rounded-full bg-slate-900 hover:bg-indigo-600 text-white flex items-center justify-center hover:scale-105 transition-all shadow-lg shrink-0">
                                 {isAudioPlaying ? (
-                                    <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M10 9v6m4-6v6" /></svg>
+                                    <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M10 9v6m4-6v6" /></svg>
                                 ) : (
-                                    <svg className="w-8 h-8 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /></svg>
+                                    <svg className="w-8 h-8 ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /></svg>
                                 )}
                             </button>
                             <button onClick={() => handleSeek(5)} className="p-2 rounded-full hover:bg-slate-100 text-slate-500 font-bold text-xs flex flex-col items-center gap-1 transition-colors">
-                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
                                 +5s
                             </button>
                             <button onClick={() => handleSeek(15)} className="p-2 rounded-full hover:bg-slate-100 text-slate-500 font-bold text-xs flex flex-col items-center gap-1 transition-colors">
-                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" /></svg>
                                 +15s
                             </button>
                         </div>
@@ -1275,7 +1319,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   const renderGrammarTemplate = () => {
     return (
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-8 md:p-12 leading-[2.5] text-lg text-slate-800 max-w-4xl mx-auto">
-        {story.template.map((sentence, index) => {
+        {story.template?.map((sentence, index) => {
           const parts = sentence.split(/\{(\d+)\}/);
           return (
             <span key={index}>
@@ -1284,7 +1328,9 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                   return <span key={partIndex}>{part}</span>;
                 } else {
                   const taskIndex = parseInt(part);
-                  const task = story.tasks[taskIndex];
+                  const task = story.tasks?.[taskIndex];
+                  if (!task) return null;
+                  
                   const taskId = taskIndex.toString();
                   const isCorrect = validation[taskId];
                   const userAnswer = inputs[taskId] || '';
@@ -1328,7 +1374,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 lg:sticky lg:top-24">
                 <h3 className="font-bold text-slate-800 mb-4 uppercase text-xs tracking-wider">Headings</h3>
                 <div className="grid gap-3">
-                    {story.template.map((heading, idx) => (
+                    {story.template?.map((heading, idx) => (
                         <div key={idx} className="bg-amber-50 p-3 rounded-xl border border-amber-100 text-amber-900 text-sm font-medium">
                             <span className="font-bold mr-2 text-amber-600">{idx + 1}.</span> {heading}
                         </div>
@@ -1339,7 +1385,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
         <div className="lg:w-2/3 order-2 lg:order-1 grid gap-8">
             {story.texts?.map((textItem) => {
                 const isCorrect = validation[textItem.letter];
-                const correctAnswers = story.readingAnswers![textItem.letter];
+                const correctAnswers = story.readingAnswers![textItem.letter] || [];
                 return (
                     <div key={textItem.letter} className="bg-white rounded-2xl p-8 shadow-sm border border-slate-100 relative group hover:shadow-md transition-shadow">
                         <div className="absolute -left-4 -top-4 w-10 h-10 rounded-xl bg-slate-800 text-white flex items-center justify-center font-bold text-lg shadow-lg rotate-3 group-hover:rotate-6 transition-transform">
@@ -1349,7 +1395,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                         <div className="flex items-center justify-end gap-3 pt-6 border-t border-slate-50">
                             <span className="text-xs font-bold text-slate-400 uppercase">Match:</span>
                             <div className="flex gap-2 flex-wrap justify-end">
-                                {story.template.map((_, idx) => {
+                                {story.template?.map((_, idx) => {
                                     const num = (idx + 1).toString();
                                     const isSelected = inputs[textItem.letter] === num;
                                     const isThisCorrect = correctAnswers.includes(idx + 1);
@@ -1397,7 +1443,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                   <p className="font-medium text-slate-800 text-lg">{q.text}</p>
                               </div>
                               <div className="grid grid-cols-3 gap-3">
-                                  {q.options.map((opt, idx) => {
+                                  {q.options?.map((opt, idx) => {
                                       const isSelected = inputs[q.id.toString()] === (idx + 1).toString();
                                       const isThisCorrectOption = (idx + 1) === q.answer;
                                       let btnClass = "bg-slate-50 text-slate-500 border-slate-200 hover:border-indigo-300 hover:bg-white";
@@ -1430,7 +1476,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
         <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
           <button onClick={onBack} className="flex items-center text-slate-500 hover:text-slate-800 transition-colors group px-2 py-1 rounded-lg hover:bg-slate-50">
             <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center mr-3 group-hover:bg-indigo-100 group-hover:text-indigo-600 transition-colors">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg>
             </div>
             <span className="font-bold text-sm">Dashboard</span>
           </button>
@@ -1459,7 +1505,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
         {!showResults && type !== ExerciseType.WRITING && type !== ExerciseType.SPEAKING && type !== ExerciseType.ORAL_SPEECH && type !== ExerciseType.LISTENING && (
             <div className="mb-8 bg-indigo-50 border border-indigo-100 rounded-2xl p-5 flex items-start gap-4">
                 <div className="p-2 bg-indigo-100 rounded-lg text-indigo-600 mt-1">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                 </div>
                 <div>
                     <h4 className="font-bold text-indigo-900 text-sm mb-1">Instructions</h4>
@@ -1483,6 +1529,13 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
         )}
 
         {type === ExerciseType.LISTENING && renderListening()}
+        
+        {/* Fallback for unknown types */}
+        {!Object.values(ExerciseType).includes(type) && (
+            <div className="text-center p-10 text-slate-400">
+                Unknown exercise type. Please contact support.
+            </div>
+        )}
       </div>
     </div>
   );

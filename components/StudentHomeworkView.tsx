@@ -34,7 +34,7 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
       case ExerciseType.ORAL_SPEECH: source = [...oralStories, ...monologueStories]; break;
       case ExerciseType.WRITING: source = writingStories; break;
     }
-    return source.find(s => s.title === title);
+    return source?.find(s => s.title === title);
   };
 
   const getBadgeStyle = (type: string) => {
@@ -51,7 +51,8 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
   };
 
   const getStatusBadge = (status: string, dueDate: string) => {
-    const isLate = new Date() > new Date(dueDate) && status !== 'completed';
+    const due = new Date(dueDate);
+    const isLate = !isNaN(due.getTime()) && new Date() > due && status !== 'completed';
     
     if (status === 'completed') {
       return <span className="absolute top-4 right-4 px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-[10px] font-bold uppercase tracking-wider border border-emerald-200 shadow-sm flex items-center gap-1"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Done</span>;
@@ -69,15 +70,20 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
     // Sort all assignments first: Pending -> Overdue -> Completed, then by Due Date
     const sortedAll = [...assignments].sort((a, b) => {
       const statusOrder = { 'pending': 1, 'overdue': 2, 'completed': 3 };
-      if (statusOrder[a.status] !== statusOrder[b.status]) {
-        return statusOrder[a.status] - statusOrder[b.status];
-      }
-      return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+      const statusDiff = (statusOrder[a.status as keyof typeof statusOrder] || 0) - (statusOrder[b.status as keyof typeof statusOrder] || 0);
+      if (statusDiff !== 0) return statusDiff;
+      
+      const dateA = new Date(a.due_date).getTime() || 0;
+      const dateB = new Date(b.due_date).getTime() || 0;
+      return dateA - dateB;
     });
 
     sortedAll.forEach(task => {
         // Fallback to today if created_at is missing for some reason
         const dateObj = task.created_at ? new Date(task.created_at) : new Date();
+        // Check for invalid date
+        if (isNaN(dateObj.getTime())) return;
+
         // Format: 25.04 (DD.MM)
         const dateKey = dateObj.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
             
@@ -147,7 +153,7 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
             // View 2: Task List for Selected Date
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in">
                 {activeDateGroup.map((task) => {
-                    const story = findStory(task.exercise_title, task.exercise_type);
+                    const story = findStory(task.exercise_title, task.exercise_type as ExerciseType);
                     const badgeStyle = getBadgeStyle(task.exercise_type);
                     
                     return (
@@ -173,7 +179,7 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
                                 </p>
                             ) : (
                                 <p className="text-sm text-slate-400 line-clamp-2">
-                                    {story?.text?.substring(0, 60) || "Complete the task..."}
+                                    {story?.text?.substring(0, 60) || story?.template?.[0]?.substring(0,60) || "Complete the task..."}
                                 </p>
                             )}
                         </div>
@@ -186,7 +192,7 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
 
                             {task.status !== 'completed' && story ? (
                                 <button 
-                                    onClick={() => onStartExercise(story, task.exercise_type)}
+                                    onClick={() => onStartExercise(story, task.exercise_type as ExerciseType)}
                                     className="group-hover:translate-x-1 transition-transform text-indigo-600 font-bold flex items-center gap-1"
                                 >
                                     Start

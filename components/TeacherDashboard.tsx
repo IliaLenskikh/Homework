@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { UserProfile, StudentResult, HomeworkAssignment, LiveSession, ExerciseType } from '../types';
@@ -53,6 +54,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     const [emailInput, setEmailInput] = useState('');
     const [isHomeworkModalOpen, setIsHomeworkModalOpen] = useState(false);
     const [studentToAssign, setStudentToAssign] = useState<TrackedStudent | null>(null);
+    const [resultsLoading, setResultsLoading] = useState(false);
     
     // Live Session Push State
     const [pushTab, setPushTab] = useState<ExerciseType>(ExerciseType.GRAMMAR);
@@ -69,16 +71,23 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     }, [selectedStudentId]);
 
     const fetchStudentResults = async (studentId: string) => {
-        const { data, error } = await supabase
-            .from('student_results')
-            .select('*')
-            .eq('student_id', studentId)
-            .order('created_at', { ascending: false });
-        
-        if (error) {
-            console.error("Error fetching results", error);
-        } else {
-            setStudentResults(data as StudentResult[]);
+        setResultsLoading(true);
+        try {
+            const { data, error } = await supabase
+                .from('student_results')
+                .select('*')
+                .eq('student_id', studentId)
+                .order('created_at', { ascending: false });
+            
+            if (error) {
+                console.error("Error fetching results", error);
+            } else {
+                setStudentResults(data as StudentResult[]);
+            }
+        } catch (e) {
+            console.error("Fetch failed", e);
+        } finally {
+            setResultsLoading(false);
         }
     };
 
@@ -188,7 +197,11 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 <div className="flex-1 overflow-y-auto">
                     <h3 className="font-bold text-slate-800 mb-4 border-b pb-2">Recent Activity</h3>
                     <div className="space-y-3">
-                        {studentResults.length === 0 ? (
+                        {resultsLoading ? (
+                            <div className="text-center py-10">
+                                <svg className="animate-spin h-8 w-8 text-indigo-500 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                            </div>
+                        ) : studentResults.length === 0 ? (
                             <p className="text-slate-400 text-sm">No activity recorded.</p>
                         ) : (
                             studentResults.map(result => (
@@ -213,7 +226,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     </div>
                 </div>
 
-                {resultDetail && (
+                {resultDetail && resultDetail.details && (
                     <div className="mt-6 border-t pt-6 h-1/2 overflow-y-auto">
                         <h4 className="font-bold text-slate-800 mb-4">Attempt Details</h4>
                         <div className="space-y-4">
@@ -260,7 +273,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             <div className="w-64 bg-white border-r border-slate-200 flex flex-col">
                 <div className="p-6 border-b border-slate-100">
                     <h2 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-                        <svg className="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                        <svg className="w-6 h-6 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4.26 10.147a60.436 60.436 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5" /></svg>
                         Teacher
                     </h2>
                 </div>
@@ -270,7 +283,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                         onClick={() => setActiveTab('LIVE_VIEW')}
                         className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'LIVE_VIEW' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'}`}
                     >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5m.75-9l3-3 2.148 2.148A12.061 12.061 0 0116.5 7.605" /></svg>
                         Live View
                         {activeSessions.length > 0 && <span className="ml-auto bg-rose-500 text-white text-[10px] px-2 py-0.5 rounded-full">{activeSessions.length}</span>}
                     </button>
@@ -278,14 +291,14 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                         onClick={() => setActiveTab('STUDENTS')}
                         className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'STUDENTS' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'}`}
                     >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" /></svg>
                         Students
                     </button>
                     <button 
                         onClick={() => setActiveTab('HOMEWORK')}
                         className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'HOMEWORK' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'}`}
                     >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" /></svg>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" /></svg>
                         Homework
                     </button>
                 </nav>
@@ -354,7 +367,7 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                         <div className="col-span-2 bg-white rounded-2xl border border-slate-200 p-6 overflow-hidden h-full">
                             {selectedStudent ? renderStudentDetail() : (
                                 <div className="h-full flex flex-col items-center justify-center text-slate-300">
-                                    <svg className="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+                                    <svg className="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
                                     <p>Select a student to view details</p>
                                 </div>
                             )}
