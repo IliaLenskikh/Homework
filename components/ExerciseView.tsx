@@ -54,6 +54,8 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   // Writing State
   const [emailContent, setEmailContent] = useState('');
   const [wordCount, setWordCount] = useState(0);
+  const [isSubmittingWriting, setIsSubmittingWriting] = useState(false);
+  const [lastSaved, setLastSaved] = useState<string | null>(null);
 
   // --- Real-time Broadcasting Logic ---
   const broadcastChannelRef = useRef<any>(null);
@@ -95,6 +97,30 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
         };
     }
   }, [userProfile, story.title, type]);
+
+  // Load writing draft
+  useEffect(() => {
+      if (type === ExerciseType.WRITING) {
+          const draftKey = `draft_${story.title}`;
+          const saved = localStorage.getItem(draftKey);
+          if (saved) {
+              setEmailContent(saved);
+              setWordCount(saved.trim().split(/\s+/).filter(w => w.length > 0).length);
+          }
+      }
+  }, [type, story.title]);
+
+  // Auto-save writing draft
+  useEffect(() => {
+      if (type === ExerciseType.WRITING && emailContent) {
+          const timer = setTimeout(() => {
+              const draftKey = `draft_${story.title}`;
+              localStorage.setItem(draftKey, emailContent);
+              setLastSaved(new Date().toLocaleTimeString());
+          }, 2000); // Save after 2s of inactivity
+          return () => clearTimeout(timer);
+      }
+  }, [emailContent, type, story.title]);
 
   const broadcastTyping = (questionId: string, currentInput: string, allInputs: UserProgress, isCorrect: boolean | null) => {
       if (!broadcastChannelRef.current || !userProfile?.id) return;
@@ -380,7 +406,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
           question: taskLabel,
           userAnswer: "Audio Response",
           correctAnswer: "Teacher Review",
-          isCorrect: true, // Mark as completed
+          isCorrect: null, // Pending review
           audioUrl: publicUrl,
           context: contextText
       }];
@@ -447,30 +473,54 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       setEmailContent(text);
       const newInputs = { ...inputs, email: text };
       broadcastTyping("email", text, newInputs, null);
-      const count = text.trim() === '' ? 0 : text.trim().split(/\s+/).length;
+      const count = text.trim() === '' ? 0 : text.trim().split(/\s+/).filter(w => w.length > 0).length;
       setWordCount(count);
   }
 
-  const handleSendEmail = () => {
-    if (!userProfile?.teacherEmail) {
-      alert("Please configure your Teacher's Email in Settings first.");
-      return;
+  const handleSubmitWriting = async () => {
+    setIsSubmittingWriting(true);
+    
+    // Simple validation
+    if (wordCount < 30) {
+        if (!confirm("Your email is very short. Are you sure you want to submit?")) {
+            setIsSubmittingWriting(false);
+            return;
+        }
     }
-    const subject = story.emailSubject || "OGE Writing Task";
-    const body = `From: ${userProfile.email}\nStudent: ${userProfile.name}\n\nTask:\n${story.text}\n\nAnswer:\n${emailContent}`;
-    const mailtoLink = `mailto:${userProfile.teacherEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.open(mailtoLink, '_blank');
-    onComplete(10, 10, [{ question: 'Email Task', userAnswer: emailContent, correctAnswer: 'See Teacher Email', isCorrect: true }]);
-    onBack();
+
+    try {
+        const details: AttemptDetail[] = [{
+            question: 'Email Writing Task',
+            userAnswer: emailContent,
+            correctAnswer: 'Pending Review',
+            isCorrect: null, // Indicates it needs grading
+            context: story.text || story.emailBody,
+            wordCount: wordCount,
+        }];
+
+        // Clear local storage draft
+        localStorage.removeItem(`draft_${story.title}`);
+        
+        // Use 0 as initial score, max score 10
+        onComplete(0, 10, details);
+        
+        // Show success visual (onComplete handles redirect usually, but just in case)
+        setSpeakingPhase('FINISHED'); // Reuse state for UI feedback or similar
+    } catch (e) {
+        console.error("Submission failed", e);
+        alert("Failed to submit. Please try again.");
+    } finally {
+        setIsSubmittingWriting(false);
+    }
   };
 
   const checkAnswers = () => {
     if (type === ExerciseType.WRITING) {
-        handleSendEmail();
+        // Now handled by handleSubmitWriting directly via UI button
         return;
     }
     if (type === ExerciseType.SPEAKING || type === ExerciseType.ORAL_SPEECH) {
-        // Should be handled by recording flows, but fallback if manual check needed (unlikely)
+        // Should be handled by recording flows
         return;
     }
 
@@ -615,22 +665,41 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   };
 
   const renderWritingLayout = () => {
+      const wordCountClass = wordCount < 90 ? 'text-amber-500' : wordCount > 132 ? 'text-rose-500' : 'text-emerald-500';
+      
       return (
           <div className="flex flex-col lg:flex-row gap-6 h-full min-h-[600px] lg:h-[calc(100vh-200px)]">
              <div className="lg:w-1/3 order-2 lg:order-1 flex flex-col gap-4">
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex-1">
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex-1 flex flex-col">
                    <h3 className="font-bold text-slate-800 mb-4 text-sm uppercase tracking-wide">Task</h3>
-                   <div className="prose prose-sm text-slate-600 mb-6">
+                   <div className="prose prose-sm text-slate-600 mb-6 flex-1 overflow-y-auto custom-scrollbar">
                       <p className="whitespace-pre-line leading-relaxed">{story.text}</p>
                    </div>
-                   <div className="border-t border-slate-100 pt-4">
-                      <h4 className="font-bold text-slate-800 text-xs uppercase mb-3">Checklist</h4>
+                   
+                   <div className="border-t border-slate-100 pt-4 mt-auto">
+                      <div className="flex items-center justify-between mb-2">
+                          <h4 className="font-bold text-slate-800 text-xs uppercase">Stats</h4>
+                          {lastSaved && <span className="text-[10px] text-slate-400">Saved: {lastSaved}</span>}
+                      </div>
                       <div className="space-y-3">
                           <div className="flex items-center gap-3 text-sm text-slate-600">
-                             <div className={`w-3 h-3 rounded-full ${wordCount >= 100 && wordCount <= 120 ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                             <span className="flex-1">Word count: <span className="font-mono font-bold text-slate-800">{wordCount}</span> / 100-120</span>
+                             <div className={`w-3 h-3 rounded-full ${wordCount >= 100 && wordCount <= 120 ? 'bg-emerald-500' : (wordCount >= 90 && wordCount <= 132 ? 'bg-amber-400' : 'bg-slate-300')}`} />
+                             <span className="flex-1">Word count: <span className={`font-mono font-bold ${wordCountClass}`}>{wordCount}</span> / 100-120</span>
                           </div>
                        </div>
+                       
+                       <button 
+                        onClick={handleSubmitWriting} 
+                        disabled={isSubmittingWriting}
+                        className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95 disabled:opacity-70 flex items-center justify-center gap-2"
+                       >
+                           {isSubmittingWriting ? (
+                               <>
+                               <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                               Sending...
+                               </>
+                           ) : "Submit to Teacher"}
+                       </button>
                    </div>
                 </div>
              </div>
@@ -638,26 +707,27 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
              <div className="lg:w-2/3 order-1 lg:order-2 flex flex-col bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
                 <div className="bg-slate-50 border-b border-slate-200 px-6 py-4 flex items-center justify-between">
                    <h2 className="text-lg font-bold text-slate-800">{story.emailSubject}</h2>
-                   <span className="text-xs text-slate-400">Draft</span>
+                   <span className="text-xs text-slate-400">Draft - Auto-saving</span>
                 </div>
                 <div className="flex-1 overflow-y-auto bg-white custom-scrollbar p-6">
                    <div className="mb-8 p-4 bg-slate-50 rounded-xl border border-slate-100">
                       <div className="flex justify-between items-baseline mb-2">
                          <span className="font-bold text-slate-900">{story.emailSender}</span>
-                         <span className="text-xs text-slate-400">Today, 10:30 AM</span>
+                         <span className="text-xs text-slate-400">Received recently</span>
                       </div>
                       <p className="text-slate-700 whitespace-pre-line leading-relaxed">{story.emailBody}</p>
                    </div>
 
-                   <div className="relative group">
+                   <div className="relative group h-full flex flex-col">
                       <div className="mb-2 text-xs text-slate-400 flex justify-between">
-                         <span>To: {userProfile?.teacherEmail}</span>
+                         <span>To: {userProfile?.teacherEmail || 'Teacher'}</span>
                       </div>
                       <textarea
-                         className="w-full min-h-[300px] p-4 text-slate-800 text-lg leading-relaxed outline-none resize-none border-2 border-transparent focus:border-indigo-100 rounded-xl transition-all bg-slate-50 focus:bg-white"
-                         placeholder="Write your reply..."
+                         className="w-full flex-1 p-4 text-slate-800 text-lg leading-relaxed outline-none resize-none border-2 border-transparent focus:border-indigo-100 rounded-xl transition-all bg-slate-50 focus:bg-white"
+                         placeholder="Write your reply here..."
                          value={emailContent}
                          onChange={(e) => handleEmailChange(e.target.value)}
+                         spellCheck={false}
                       />
                    </div>
                 </div>
@@ -1331,9 +1401,9 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                      </span>
                  </div>
              )}
-             {!showResults && type !== ExerciseType.SPEAKING && type !== ExerciseType.ORAL_SPEECH && (
+             {!showResults && type !== ExerciseType.WRITING && type !== ExerciseType.SPEAKING && type !== ExerciseType.ORAL_SPEECH && type !== ExerciseType.LISTENING && (
                 <button onClick={checkAnswers} className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-lg active:scale-95">
-                    {type === ExerciseType.WRITING ? 'Send to Teacher' : 'Check All Answers'}
+                    Check All Answers
                 </button>
              )}
           </div>

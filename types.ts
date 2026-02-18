@@ -101,9 +101,10 @@ export interface AttemptDetail {
   question: string;
   userAnswer: string;
   correctAnswer: string;
-  isCorrect: boolean;
+  isCorrect: boolean | null; // null for pending review
   context?: string; // For context sentences
   audioUrl?: string; // URL to the recorded audio
+  wordCount?: number; // Word count for writing tasks
 }
 
 export interface TeacherFeedback {

@@ -1,4 +1,7 @@
 
+-- Enable UUID extension
+create extension if not exists "pgcrypto";
+
 -- 1. Profiles Table (Public User Data)
 create table if not exists public.profiles (
   id uuid references auth.users on delete cascade not null primary key,
@@ -110,7 +113,7 @@ create policy "Students insert results"
   on public.student_results for insert 
   with check ( auth.uid() = student_id );
 
--- 4. Teacher Feedback Table (NEW)
+-- 4. Teacher Feedback Table
 create table if not exists public.teacher_feedback (
   id uuid default gen_random_uuid() primary key,
   attempt_id uuid references public.student_results(id) on delete cascade not null,
@@ -126,10 +129,8 @@ drop policy if exists "Feedback Access Policy" on public.teacher_feedback;
 create policy "Feedback Access Policy"
   on public.teacher_feedback for all
   using (
-    -- Teachers can manage their own feedback
     auth.uid() = teacher_id
     OR
-    -- Students can view feedback on their attempts
     exists (
       select 1 from public.student_results sr
       where sr.id = teacher_feedback.attempt_id
@@ -138,6 +139,7 @@ create policy "Feedback Access Policy"
   );
 
 -- 5. Storage Bucket for Audio (Speaking Tasks)
+-- Note: You might need to create the bucket 'audio-responses' manually in the dashboard if this script fails on permissions
 insert into storage.buckets (id, name, public) 
 values ('audio-responses', 'audio-responses', true)
 on conflict (id) do nothing;
@@ -205,3 +207,9 @@ create policy "Students can join sessions"
   on public.session_participants
   for insert
   with check ( auth.uid() = student_id );
+
+-- 8. ENABLE REALTIME REPLICATION
+-- This is critical for the Live Session and Homework notifications to work
+alter publication supabase_realtime add table public.homework_assignments;
+alter publication supabase_realtime add table public.live_classroom_sessions;
+alter publication supabase_realtime add table public.session_participants;
