@@ -96,11 +96,7 @@ export const useStudentLiveSession = (
       subscribeToExercisePushes(codeStr.toUpperCase());
       
     } catch (err: any) {
-        if (err.code === '42P01') {
-           showToast("Database not setup for Live Sessions.", "error");
-       } else {
-           showToast(getErrorMessage(err), "error");
-       }
+       showToast(getErrorMessage(err), "error");
     } finally {
         setLoading(false);
     }

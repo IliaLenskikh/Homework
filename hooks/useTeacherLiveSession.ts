@@ -161,11 +161,7 @@ export const useTeacherLiveSession = (userProfile: UserProfile, trackedStudents:
       subscribeToSessionParticipants(sessionId);
       
     } catch (err: any) {
-       if (err.code === '42P01') {
-           showToast("Database not setup for Live Sessions. Run SQL script.", "error");
-       } else {
-           showToast(getErrorMessage(err), "error");
-       }
+       showToast(getErrorMessage(err), "error");
     } finally {
         setLoading(false);
     }

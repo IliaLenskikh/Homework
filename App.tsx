@@ -4,6 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { usePresence } from './hooks/usePresence';
 import { useTeacherLiveSession } from './hooks/useTeacherLiveSession';
 import { useStudentLiveSession } from './hooks/useStudentLiveSession';
+import { isTableNotFoundError } from './services/errorMapper';
 import { 
   Story, 
   ExerciseType, 
@@ -67,7 +68,9 @@ export default function App() {
     handleRoleSwitch: contextHandleRoleSwitch,
     setAuthError,
     setAuthSuccessMsg,
-    setUserProfile
+    setUserProfile,
+    profileError,
+    retryProfileLoad
   } = useAuth();
 
   const userProfile = authProfile || { name: '', email: '', teacherEmail: '', role: undefined };
@@ -140,7 +143,7 @@ export default function App() {
   }, [authSuccessMsg, navigate]);
 
   useEffect(() => {
-    if (isAuthChecking || isProfileLoading) return;
+    if (isAuthChecking || isProfileLoading || profileError) return;
 
     const currentPath = location.pathname;
 
@@ -224,7 +227,7 @@ export default function App() {
               .eq('student_id', studentId);
           
           if (error) {
-              if (error.code === '42P01') {
+              if (isTableNotFoundError(error)) {
                   console.warn("Homework table missing. SQL setup required.");
               }
               return;
@@ -343,7 +346,7 @@ export default function App() {
             .eq('teacher_id', userProfile.id) 
             .eq('status', 'pending');
 
-          if (countError && countError.code === '42P01') {
+          if (countError && isTableNotFoundError(countError)) {
               console.warn("Homework table missing");
           }
 
@@ -403,7 +406,7 @@ export default function App() {
         .eq('student_id', studentId)
         .order('created_at', { ascending: false });
 
-      if (error && error.code !== '42P01') throw error;
+      if (error && !isTableNotFoundError(error)) throw error;
       if (data) setStudentHomework(data as HomeworkAssignment[]);
     } catch (err) {
       console.error(err);
@@ -568,6 +571,32 @@ export default function App() {
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
           <p className="text-slate-500 font-medium animate-pulse">Loading profile...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (profileError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50" style={learningBackground}>
+        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center border border-rose-100">
+          <div className="w-16 h-16 bg-rose-100 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-600">
+            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          </div>
+          <h2 className="text-xl font-bold text-slate-900 mb-2">Connection Error</h2>
+          <p className="text-slate-500 mb-6">{profileError}</p>
+          <button 
+            onClick={() => retryProfileLoad()}
+            className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg active:scale-95 w-full"
+          >
+            Retry Connection
+          </button>
+          <button 
+            onClick={() => contextHandleLogout()}
+            className="mt-4 text-slate-400 hover:text-slate-600 text-sm font-medium"
+          >
+            Log Out
+          </button>
         </div>
       </div>
     );

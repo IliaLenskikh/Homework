@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { UserProfile, UserRole } from '../types';
 import { getErrorMessage } from '../utils/errorHandling';
+import { isTableNotFoundError } from '../services/errorMapper';
 
 interface AuthContextType {
   userProfile: UserProfile | null;
@@ -14,6 +15,8 @@ interface AuthContextType {
   handlePasswordReset: (email: string) => Promise<void>;
   handleRoleSelection: (role: UserRole) => Promise<void>;
   handleRoleSwitch: () => Promise<void>;
+  profileError: string | null;
+  retryProfileLoad: () => Promise<void>;
   setAuthError: (msg: string | null) => void;
   setAuthSuccessMsg: (msg: string | null) => void;
   setUserProfile: React.Dispatch<React.SetStateAction<UserProfile | null>>;
@@ -28,6 +31,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSuccessMsg, setAuthSuccessMsg] = useState<string | null>(null);
 
+  const [profileError, setProfileError] = useState<string | null>(null);
+
   useEffect(() => {
     checkSession();
     
@@ -40,11 +45,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       
       if (event === 'SIGNED_IN' && session) {
+          // Reset error state on new sign in
+          setProfileError(null);
           loadUserProfile(session.user.id, session.user.email!).catch(console.error);
       }
       
       if (event === 'SIGNED_OUT') {
           setUserProfile(null);
+          setProfileError(null);
       }
     });
 
@@ -55,15 +63,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const checkSession = async () => {
     setIsAuthChecking(true);
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session) {
-      await loadUserProfile(session.user.id, session.user.email!);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        await loadUserProfile(session.user.id, session.user.email!);
+      }
+    } catch (error) {
+      console.error("Session check error:", error);
+    } finally {
+      setIsAuthChecking(false);
     }
-    setIsAuthChecking(false);
   };
 
   const loadUserProfile = async (userId: string, userEmail: string) => {
     setIsProfileLoading(true);
+    setProfileError(null);
+    
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -72,10 +87,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .single();
 
       if (error && error.code !== 'PGRST116') {
-         if (error.code === '42P01') {
+         if (isTableNotFoundError(error)) {
              console.warn("Profiles table missing. Running in limited mode.");
+             // In dev mode with missing table, we allow access but role selection might fail or be weird.
+             // We'll treat it as a new user to allow the app to function partially.
+             setUserProfile({ id: userId, name: '', email: userEmail, teacherEmail: '' });
+             return;
          } else {
-             console.error('Error loading profile:', error);
+             throw error;
          }
       }
 
@@ -89,13 +108,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           completed_stories: data.completed_stories || []
         });
       } else {
+        // New user (no profile row yet)
         setUserProfile({ id: userId, name: '', email: userEmail, teacherEmail: '' });
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error("Critical profile load error:", e);
-      setUserProfile({ id: userId, name: '', email: userEmail, teacherEmail: '' });
+      setProfileError(getErrorMessage(e));
+      // Do NOT set a dummy profile here. This prevents incorrect redirection to role selection.
     } finally {
       setIsProfileLoading(false);
+    }
+  };
+
+  const retryProfileLoad = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      await loadUserProfile(session.user.id, session.user.email!);
     }
   };
 
@@ -201,6 +229,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       handlePasswordReset,
       handleRoleSelection,
       handleRoleSwitch,
+      profileError,
+      retryProfileLoad,
       setAuthError,
       setAuthSuccessMsg,
       setUserProfile
