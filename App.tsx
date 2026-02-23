@@ -1,6 +1,9 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { usePresence } from './hooks/usePresence';
+import { useTeacherLiveSession } from './hooks/useTeacherLiveSession';
+import { useStudentLiveSession } from './hooks/useStudentLiveSession';
 import { 
   Story, 
   ExerciseType, 
@@ -91,61 +94,44 @@ export default function App() {
   const [trackedStudents, setTrackedStudents] = useState<TrackedStudent[]>([]);
   const [studentHomework, setStudentHomework] = useState<HomeworkAssignment[]>([]);
   
-  // New Teacher Dashboard State
-  const [liveStudents, setLiveStudents] = useState<Record<string, LiveSession>>({});
+  // Live Session Hooks
+  const {
+    liveSessionActive,
+    liveSessionCode,
+    sessionParticipants,
+    currentPushedExercise,
+    liveStudents,
+    startLiveSession,
+    endLiveSession,
+    pushExerciseToStudents,
+    loading: teacherLoading
+  } = useTeacherLiveSession(userProfile, trackedStudents);
 
-  const [selectedStudentForAssignment, setSelectedStudentForAssignment] = useState<TrackedStudent | null>(null); 
+  const [selectedStudentForAssignment, setSelectedStudentForAssignment] = useState<TrackedStudent | null>(null);
 
-  // Live Session State (Teacher)
-  const [liveSessionActive, setLiveSessionActive] = useState(false);
-  const [liveSessionCode, setLiveSessionCode] = useState<string | null>(null);
-  const [sessionParticipants, setSessionParticipants] = useState<string[]>([]); 
-  const [currentPushedExercise, setCurrentPushedExercise] = useState<{title: string, type: ExerciseType} | null>(null);
-  const sessionChannelRef = useRef<RealtimeChannel | null>(null); // For participant DB changes
-  const liveSessionBroadcastRef = useRef<RealtimeChannel | null>(null); // For pushing exercises (Teacher)
-
-  // Live Session State (Student)
-  const [joinedSessionCode, setJoinedSessionCode] = useState<string | null>(null);
-  const [joinSessionInput, setJoinSessionInput] = useState('');
-  const [incomingExercise, setIncomingExercise] = useState<{title: string, type: ExerciseType} | null>(null);
-  const [showExercisePushModal, setShowExercisePushModal] = useState(false);
-  const liveSessionChannelRef = useRef<RealtimeChannel | null>(null); // For listening to exercises (Student)
-
-  interface OnlineUser {
-    id: string;
-    name: string;
-    role: string;
-    online_at: string;
-  }
+  const {
+    joinedSessionCode,
+    joinSessionInput,
+    setJoinSessionInput,
+    incomingExercise,
+    showExercisePushModal,
+    joinLiveSession,
+    loading: studentLoading
+  } = useStudentLiveSession(userProfile, (title, type) => {
+    const exercise = allStories.find(s => s.title === title && s.type === type);
+    if (exercise) {
+      startExercise(exercise, type, 'CATALOG');
+    } else {
+      showToast("Exercise not found locally", "error");
+    }
+  });
 
   // Presence State
-  const [onlineUsers, setOnlineUsers] = useState<Record<string, OnlineUser>>({});
+  const { onlineUsers } = usePresence(userProfile);
 
   const totalTasks = allStories.length;
 
-  useEffect(() => {
-    if (sessionChannelRef.current) {
-      supabase.removeChannel(sessionChannelRef.current);
-    }
-    if (liveSessionChannelRef.current) {
-      supabase.removeChannel(liveSessionChannelRef.current);
-    }
-    if (liveSessionBroadcastRef.current) {
-      supabase.removeChannel(liveSessionBroadcastRef.current);
-    }
 
-    return () => {
-      if (sessionChannelRef.current) {
-        supabase.removeChannel(sessionChannelRef.current);
-      }
-      if (liveSessionChannelRef.current) {
-        supabase.removeChannel(liveSessionChannelRef.current);
-      }
-      if (liveSessionBroadcastRef.current) {
-        supabase.removeChannel(liveSessionBroadcastRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     if (authSuccessMsg === "Please set a new password below.") {
@@ -182,44 +168,7 @@ export default function App() {
     }
   }, [authProfile?.id, authProfile?.role]);
 
-  // Presence Subscription (Online Status)
-  useEffect(() => {
-    let channel: RealtimeChannel | null = null;
 
-    if (userProfile.id && userProfile.name) {
-        channel = supabase.channel('classroom_global');
-        
-        channel
-            .on('presence', { event: 'sync' }, () => {
-                const state = channel!.presenceState();
-                const users: Record<string, OnlineUser> = {};
-                
-                Object.values(state).forEach((presences) => {
-                    presences.forEach((p: any) => {
-                        users[p.id] = p as OnlineUser;
-                    });
-                });
-                
-                setOnlineUsers(users);
-            })
-            .subscribe(async (status: string) => {
-                if (status === 'SUBSCRIBED') {
-                    await channel?.track({
-                        id: userProfile.id,
-                        name: userProfile.name,
-                        role: userProfile.role,
-                        online_at: new Date().toISOString(),
-                    });
-                }
-            });
-    }
-
-    return () => {
-        if (channel) {
-            supabase.removeChannel(channel);
-        }
-    };
-  }, [userProfile.id, userProfile.name, userProfile.role]);
 
   // Realtime subscription for Students (Homework updates)
   useEffect(() => {
@@ -245,54 +194,7 @@ export default function App() {
     };
   }, [userProfile.role, userProfile.id]);
 
-  // Optimized Live View Subscription for Teachers (Single Channel)
-  useEffect(() => {
-    if (userProfile.role !== 'teacher' || trackedStudents.length === 0) return;
-    
-    const channel = supabase.channel('live_sessions_all');
-    
-    trackedStudents.forEach(student => {
-      channel
-        .on('broadcast', { event: `student_${student.id}_started` }, (payload) => {
-          setLiveStudents(prev => ({
-            ...prev,
-            [student.id]: {
-              ...payload.payload,
-              currentQuestion: '',
-              userInput: '',
-              allAnswers: {}, 
-              isCorrect: null,
-              progressPercentage: 0,
-              lastActivity: Date.now()
-            }
-          }));
-          showToast(`${payload.payload.studentName} started working`, 'info');
-        })
-        .on('broadcast', { event: `student_${student.id}_typing` }, (payload) => {
-          setLiveStudents(prev => ({
-            ...prev,
-            [student.id]: {
-              ...prev[student.id],
-              ...payload.payload, 
-              lastActivity: payload.payload.timestamp
-            }
-          }));
-        })
-        .on('broadcast', { event: `student_${student.id}_ended` }, (payload) => {
-          setLiveStudents(prev => {
-            const updated = { ...prev };
-            delete updated[student.id];
-            return updated;
-          });
-        });
-    });
 
-    channel.subscribe();
-    
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [userProfile.role, trackedStudents]);
 
   // Load teacher's student list from local storage
   useEffect(() => {
@@ -309,292 +211,8 @@ export default function App() {
       }
   }, [userProfile.role]);
   
-  // LIVE SESSION FUNCTIONS (TEACHER)
-  const startLiveSession = async (sessionTitle: string) => {
-    if (!userProfile.id) return;
-    
-    setLoading(true);
-    
-    try {
-      // 1. Check for existing active session to reuse
-      const { data: existingSession, error: fetchError } = await supabase
-        .from('live_classroom_sessions')
-        .select('*')
-        .eq('teacher_id', userProfile.id)
-        .eq('status', 'active')
-        .maybeSingle();
+  // LIVE SESSION FUNCTIONS (TEACHER) - Moved to useTeacherLiveSession
 
-      if (fetchError) throw fetchError;
-
-      let sessionId = '';
-      let code = '';
-
-      if (existingSession) {
-        // Reuse existing
-        sessionId = existingSession.id;
-        code = existingSession.session_code;
-        showToast(`Reconnected to active session: ${code}`, "success");
-      } else {
-        // Create new
-        code = Math.random().toString(36).substring(2, 8).toUpperCase();
-        const { data: newSession, error: insertError } = await supabase
-          .from('live_classroom_sessions')
-          .insert({
-            teacher_id: userProfile.id,
-            session_code: code,
-            title: sessionTitle,
-            status: 'active' 
-          })
-          .select()
-          .single();
-        
-        if (insertError) throw insertError;
-        sessionId = newSession.id;
-        showToast(`Live session started! Code: ${code}`, "success");
-      }
-      
-      setLiveSessionCode(code);
-      setLiveSessionActive(true);
-      
-      // Cleanup previous broadcast channel if exists
-      if (liveSessionBroadcastRef.current) {
-          supabase.removeChannel(liveSessionBroadcastRef.current);
-      }
-
-      // Establish persistent broadcast channel
-      const broadcastChannel = supabase.channel(`session_${code}`);
-      liveSessionBroadcastRef.current = broadcastChannel;
-      await broadcastChannel.subscribe(); 
-
-      // Listen for participants
-      subscribeToSessionParticipants(sessionId);
-      
-    } catch (err: any) {
-       if (err.code === '42P01') {
-           showToast("Database not setup for Live Sessions. Run SQL script.", "error");
-       } else {
-           showToast(getErrorMessage(err), "error");
-       }
-    } finally {
-        setLoading(false);
-    }
-  };
-
-  const endLiveSession = async () => {
-      if (!liveSessionCode) return;
-      try {
-          if (liveSessionBroadcastRef.current) {
-              await liveSessionBroadcastRef.current.send({
-                type: 'broadcast',
-                event: 'session_ended',
-                payload: {}
-              });
-          }
-
-          await supabase
-            .from('live_classroom_sessions')
-            .update({ status: 'ended', ended_at: new Date().toISOString() })
-            .eq('session_code', liveSessionCode);
-          
-          setLiveSessionActive(false);
-          setLiveSessionCode(null);
-          setSessionParticipants([]);
-          setCurrentPushedExercise(null);
-          
-          if (liveSessionBroadcastRef.current) {
-              supabase.removeChannel(liveSessionBroadcastRef.current);
-              liveSessionBroadcastRef.current = null;
-          }
-          if (sessionChannelRef.current) {
-              supabase.removeChannel(sessionChannelRef.current);
-              sessionChannelRef.current = null;
-          }
-
-          showToast("Session ended", "info");
-      } catch (err) {
-          console.error(err);
-      }
-  };
-
-  const subscribeToSessionParticipants = (sessionId: string) => {
-    if (sessionChannelRef.current) {
-      supabase.removeChannel(sessionChannelRef.current);
-    }
-    
-    const channel = supabase.channel(`session_${sessionId}_participants`);
-    sessionChannelRef.current = channel;
-    
-    channel
-      .on('postgres_changes', 
-        { event: '*', schema: 'public', table: 'session_participants', filter: `session_id=eq.${sessionId}` },
-        async () => {
-          const { data } = await supabase
-            .from('session_participants')
-            .select('student_id, profiles!student_id(full_name)')
-            .eq('session_id', sessionId)
-            .eq('status', 'connected');
-          
-          if (data) {
-            setSessionParticipants(data.map(p => p.student_id));
-          }
-        }
-      )
-      .subscribe();
-  };
-
-  const pushExerciseToStudents = async (exerciseTitle: string, exerciseType: ExerciseType) => {
-    if (!liveSessionCode || !liveSessionBroadcastRef.current) {
-      showToast("Session not properly initialized. Try restarting.", "error");
-      return;
-    }
-    
-    try {
-      // Only update current exercise, do not reset status
-      await supabase
-        .from('live_classroom_sessions')
-        .update({
-          current_exercise_title: exerciseTitle,
-          current_exercise_type: exerciseType,
-        })
-        .eq('session_code', liveSessionCode);
-      
-      // Use the persistent channel
-      await liveSessionBroadcastRef.current.send({
-        type: 'broadcast',
-        event: 'exercise_pushed',
-        payload: {
-          exerciseTitle,
-          exerciseType,
-          teacherName: userProfile.name,
-          pushedAt: Date.now()
-        }
-      });
-      
-      setCurrentPushedExercise({ title: exerciseTitle, type: exerciseType });
-      showToast(`Pushed "${exerciseTitle}" to students`, "success");
-      
-    } catch (err) {
-      showToast(getErrorMessage(err), "error");
-    }
-  };
-
-  const joinLiveSession = async (codeStr: string) => {
-    if (!userProfile.id || !codeStr) return;
-    setLoading(true);
-    
-    try {
-      const { data: session, error: sessionError } = await supabase
-        .from('live_classroom_sessions')
-        .select('*')
-        .eq('session_code', codeStr.toUpperCase())
-        .in('status', ['waiting', 'active'])
-        .single();
-      
-      if (sessionError || !session) {
-        showToast("Invalid or ended session code", "error");
-        setLoading(false);
-        return;
-      }
-
-      // Check for existing join record to prevent duplicates
-      const { data: existing } = await supabase
-        .from('session_participants')
-        .select('id')
-        .eq('session_id', session.id)
-        .eq('student_id', userProfile.id)
-        .maybeSingle();
-      
-      if (!existing) {
-          await supabase
-            .from('session_participants')
-            .insert({
-              session_id: session.id,
-              student_id: userProfile.id,
-              status: 'connected'
-            });
-      }
-      
-      setJoinedSessionCode(codeStr.toUpperCase());
-      showToast(`Joined session: ${session.title}`, "success");
-      
-      subscribeToExercisePushes(codeStr.toUpperCase());
-      
-    } catch (err: any) {
-        if (err.code === '42P01') {
-           showToast("Database not setup for Live Sessions.", "error");
-       } else {
-           showToast(getErrorMessage(err), "error");
-       }
-    } finally {
-        setLoading(false);
-    }
-  };
-
-  const subscribeToExercisePushes = (sessionCode: string) => {
-    if (liveSessionChannelRef.current) {
-      supabase.removeChannel(liveSessionChannelRef.current);
-    }
-    
-    const channel = supabase.channel(`session_${sessionCode}`);
-    liveSessionChannelRef.current = channel;
-    
-    channel
-      .on('broadcast', { event: 'exercise_pushed' }, (payload) => {
-        setIncomingExercise({
-          title: payload.payload.exerciseTitle,
-          type: payload.payload.exerciseType
-        });
-        setShowExercisePushModal(true);
-      })
-      .on('broadcast', { event: 'session_ended' }, () => {
-        showToast("Session ended by teacher", "info");
-        setJoinedSessionCode(null);
-        setIncomingExercise(null);
-        setShowExercisePushModal(false);
-        if (liveSessionChannelRef.current) {
-            supabase.removeChannel(liveSessionChannelRef.current);
-            liveSessionChannelRef.current = null;
-        }
-      })
-      .subscribe();
-  };
-
-  const handleAcceptPushedExercise = () => {
-    if (!incomingExercise) return;
-    
-    const exercise = allStories.find(s => 
-      s.title === incomingExercise.title && 
-      s.type === incomingExercise.type
-    );
-    
-    if (exercise) {
-      startExercise(exercise, incomingExercise.type, 'CATALOG');
-    } else {
-        showToast("Exercise not found locally", "error");
-    }
-    
-    setShowExercisePushModal(false);
-    setIncomingExercise(null);
-  };
-
-  // Auto-accept effect with crash fix
-  useEffect(() => {
-    let isMounted = true;
-    let timer: number | null = null;
-    
-    if (showExercisePushModal && incomingExercise) {
-      timer = window.setTimeout(() => {
-        if (isMounted) { 
-          handleAcceptPushedExercise();
-        }
-      }, 1500);
-    }
-      
-    return () => {
-        isMounted = false;
-        if (timer) clearTimeout(timer);
-    };
-  }, [showExercisePushModal, incomingExercise]);
 
 
   const loadHomework = async (studentId: string) => {
@@ -963,7 +581,7 @@ export default function App() {
             <AppRouter
               userProfile={userProfile}
               setUserProfile={setUserProfile}
-              loading={loading}
+              loading={loading || teacherLoading || studentLoading}
               authError={authError}
               authSuccessMsg={authSuccessMsg}
               email={email}
