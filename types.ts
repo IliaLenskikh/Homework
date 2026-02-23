@@ -1,4 +1,6 @@
 
+
+
 export interface Task {
   word: string;
   answer: string;
@@ -157,4 +159,27 @@ export interface LiveSession {
   progressPercentage: number;
   startedAt: string;
   lastActivity: number;
+}
+
+export interface OnlineUser {
+  id: string;
+  name: string;
+  role: string;
+  online_at: string;
+}
+
+export interface TrackedStudent {
+  id: string;
+  email: string;
+  name: string;
+  completedCount: number;
+  totalTasks: number;
+  pendingHomeworkCount?: number;
+  isOnline?: boolean;
+}
+
+export interface ToastMsg {
+  id: number;
+  message: string;
+  type: 'success' | 'error' | 'info';
 }
