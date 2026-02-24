@@ -20,7 +20,6 @@ import ExerciseCard from './components/ExerciseCard';
 import ExerciseView from './components/ExerciseView';
 import StudentHomeworkView from './components/StudentHomeworkView';
 import HomeworkModal from './components/HomeworkModal';
-import TeacherDashboard from './components/TeacherDashboard';
 import { AppRouter } from './components/AppRouter';
 import { grammarStories } from './data/grammar';
 import { vocabStories } from './data/vocabulary';

@@ -8,6 +8,7 @@ interface ExerciseListProps {
   completedStories: Set<string>;
   onStartExercise: (story: Story, type: ExerciseType, source: 'CATALOG' | 'HOMEWORK') => void;
   onGoHome: () => void;
+  readOnly?: boolean;
 }
 
 export const ExerciseList: React.FC<ExerciseListProps> = ({
@@ -16,6 +17,7 @@ export const ExerciseList: React.FC<ExerciseListProps> = ({
   completedStories,
   onStartExercise,
   onGoHome,
+  readOnly,
 }) => {
   let title = 'Grammar';
   let subtitle = 'Tenses & Forms';
@@ -85,6 +87,7 @@ export const ExerciseList: React.FC<ExerciseListProps> = ({
                 type={type}
                 onClick={() => onStartExercise(story, type, 'CATALOG')}
                 isCompleted={isCompleted}
+                readOnly={readOnly}
               />
             </div>
           );

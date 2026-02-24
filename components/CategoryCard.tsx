@@ -10,6 +10,7 @@ interface CategoryCardProps {
   delay: number;
   badge?: string;
   stats?: { completed: number; total: number };
+  readOnly?: boolean;
 }
 
 export const CategoryCard: React.FC<CategoryCardProps> = ({
@@ -21,6 +22,7 @@ export const CategoryCard: React.FC<CategoryCardProps> = ({
   delay,
   badge,
   stats,
+  readOnly,
 }) => {
   let iconBgColor = 'bg-gray-100 text-gray-600';
   if (colorClass.includes('indigo')) iconBgColor = 'bg-indigo-100 text-indigo-600';
@@ -34,8 +36,8 @@ export const CategoryCard: React.FC<CategoryCardProps> = ({
 
   return (
     <div
-      onClick={onClick}
-      className="bg-white p-8 rounded-3xl shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer border border-slate-100 flex flex-col items-start gap-4 h-full group relative"
+      onClick={readOnly ? undefined : onClick}
+      className={`bg-white p-8 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-start gap-4 h-full group relative ${readOnly ? 'cursor-default opacity-90' : 'hover:shadow-xl transition-all duration-300 cursor-pointer'}`}
       style={{ animationDelay: `${delay}ms` }}
     >
       <div className="absolute top-4 right-4 flex items-center gap-2">

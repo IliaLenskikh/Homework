@@ -17,9 +17,10 @@ interface StudentHomeworkViewProps {
   onBack: () => void;
   onRefresh?: () => void;
   loading?: boolean;
+  readOnly?: boolean;
 }
 
-const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, onStartExercise, onBack, onRefresh, loading }) => {
+const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, onStartExercise, onBack, onRefresh, loading, readOnly }) => {
   const [selectedDateGroup, setSelectedDateGroup] = useState<string | null>(null);
   
   // Helper to find story object by title and type
@@ -191,6 +192,7 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
                             </span>
 
                             {task.status !== 'completed' && story ? (
+                                !readOnly && (
                                 <button 
                                     onClick={() => onStartExercise(story, task.exercise_type as ExerciseType)}
                                     className="group-hover:translate-x-1 transition-transform text-indigo-600 font-bold flex items-center gap-1"
@@ -198,6 +200,7 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
                                     Start
                                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                                 </button>
+                                )
                             ) : (
                                 task.score !== undefined && (
                                     <span className="font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded">

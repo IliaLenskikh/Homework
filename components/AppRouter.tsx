@@ -14,7 +14,8 @@ import {
 import ExerciseCard from './ExerciseCard';
 import ExerciseView from './ExerciseView';
 import StudentHomeworkView from './StudentHomeworkView';
-import TeacherDashboard from './TeacherDashboard';
+import { TeacherLayout } from './TeacherLayout';
+import { StudentDashboard } from './StudentDashboard';
 import { grammarStories } from '../data/grammar';
 import { vocabStories } from '../data/vocabulary';
 import { readingStories } from '../data/reading';
@@ -122,7 +123,7 @@ const ExerciseRouteWrapper: React.FC<AppRouterProps> = (props) => {
 
   if (!story) return <div className="p-8 text-center text-slate-500">Story not found</div>;
 
-  return (
+  const exerciseView = (
     <ExerciseView 
       story={story} 
       type={exerciseType}
@@ -135,6 +136,21 @@ const ExerciseRouteWrapper: React.FC<AppRouterProps> = (props) => {
       readOnly={!!props.viewingStudentId}
     />
   );
+
+  if (props.viewingStudentId) {
+      return (
+        <TeacherLayout
+            students={props.trackedStudentsWithStatus}
+            selectedStudentId={props.viewingStudentId}
+            onSelectStudent={props.setViewingStudentId}
+            onAddStudent={props.handleAddStudent}
+        >
+            {exerciseView}
+        </TeacherLayout>
+      );
+  }
+
+  return exerciseView;
 };
 
 export const AppRouter: React.FC<AppRouterProps> = (props) => {
@@ -205,6 +221,33 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
       const total = stories.length;
       const completed = stories.filter(s => activeCompletedStories.has(s.title)).length;
       return { completed, total };
+  };
+
+  const renderExerciseList = (stories: Story[], type: ExerciseType) => {
+    const list = (
+      <ExerciseList 
+        stories={stories} 
+        type={type} 
+        completedStories={activeCompletedStories} 
+        onStartExercise={startExercise} 
+        onGoHome={goHome} 
+        readOnly={!!viewingStudentId}
+      />
+    );
+
+    if (viewingStudentId) {
+      return (
+        <TeacherLayout
+            students={trackedStudentsWithStatus}
+            selectedStudentId={viewingStudentId}
+            onSelectStudent={setViewingStudentId}
+            onAddStudent={handleAddStudent}
+        >
+            {list}
+        </TeacherLayout>
+      );
+    }
+    return list;
   };
 
   return (
@@ -449,32 +492,9 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
         !userProfile.role ? <Navigate to="/role-selection" /> :
         (
           <>
-            {(userProfile.role === 'student' || viewingStudentId) && (
+            {userProfile.role === 'student' ? (
               <div className="max-w-7xl mx-auto px-4 py-8 w-full">
-                {viewingStudentId && viewingStudent && (
-                    <div className="mb-6 bg-indigo-100 text-indigo-800 p-4 rounded-xl flex justify-between items-center shadow-sm border border-indigo-200">
-                        <div className="flex items-center gap-2 font-bold">
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                            You're viewing as: {viewingStudent.name}
-                        </div>
-                        <button 
-                            onClick={() => setViewingStudentId(null)}
-                            className="bg-white text-indigo-600 px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-indigo-50"
-                        >
-                            Exit Mirrored Mode
-                        </button>
-                    </div>
-                )}
-                <div className="mb-12 text-center">
-                  <h1 className="text-4xl md:text-5xl font-extrabold text-slate-900 mb-4 tracking-tight">
-                    Hello, {viewingStudentId ? viewingStudent?.name : userProfile.name || 'Student'}!
-                  </h1>
-                  <p className="text-lg text-slate-500 max-w-2xl mx-auto">
-                    Ready to master your English skills? Choose a category below or check your homework.
-                  </p>
-                </div>
-
-                {userProfile.role === 'student' && !viewingStudentId && !joinedSessionCode && (
+                {!joinedSessionCode && (
                   <div className="mb-8 bg-gradient-to-r from-purple-500 to-pink-500 text-white p-6 rounded-2xl shadow-xl flex flex-col md:flex-row items-center justify-between gap-6 max-w-3xl mx-auto">
                     <div>
                       <h3 className="text-xl font-bold mb-1 flex items-center gap-2">
@@ -512,143 +532,94 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
                    </div>
                 )}
 
-                <div className="bg-white/90 backdrop-blur rounded-3xl p-8 shadow-xl border border-slate-100 mb-12 flex flex-col md:flex-row items-center justify-between gap-8">
-                    <div className="flex items-center gap-6">
-                        <div className="relative w-24 h-24 flex items-center justify-center">
-                            <svg className="w-full h-full transform -rotate-90">
-                                <circle cx="48" cy="48" r="40" stroke="currentColor" strokeWidth="8" fill="transparent" className="text-slate-100" />
-                                <circle cx="48" cy="48" r="40" stroke="currentColor" strokeWidth="8" fill="transparent" strokeDasharray={251.2} strokeDashoffset={251.2 - (251.2 * activeProgressPercentage) / 100} className="text-indigo-600 transition-all duration-1000 ease-out" />
-                            </svg>
-                            <span className="absolute text-xl font-bold text-slate-800">{activeProgressPercentage}%</span>
-                        </div>
-                        <div>
-                            <div className="text-sm text-slate-400 font-bold uppercase tracking-wider mb-1">Total Progress</div>
-                            <div className="text-2xl font-extrabold text-slate-900">{activeTotalCompleted} / {totalTasks} Tasks</div>
-                        </div>
-                    </div>
-                    
-                    <div 
-                      onClick={() => navigate('/homework')}
-                      className="flex items-center gap-4 bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-4 rounded-2xl shadow-lg cursor-pointer hover:scale-105 transition-transform"
-                    >
-                        <div className="p-3 bg-white/20 rounded-xl backdrop-blur-sm">
-                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" /></svg>
-                        </div>
-                        <div>
-                            <div className="font-bold text-lg">Homework</div>
-                            <div className="text-indigo-100 text-sm">{activePendingHomeworkCount} tasks pending</div>
-                        </div>
-                        <svg className="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <CategoryCard 
-                      title="Grammar" 
-                      subtitle="Tenses & Forms" 
-                      stats={getCategoryStats(grammarStories)}
-                      onClick={() => navigate('/exercise/grammar')}
-                      colorClass="text-indigo-600 bg-indigo-50"
-                      delay={0}
-                      icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" /></svg>}
-                  />
-                  <CategoryCard 
-                      title="Vocabulary" 
-                      subtitle="Word Formation" 
-                      stats={getCategoryStats(vocabStories)}
-                      onClick={() => navigate('/exercise/vocabulary')}
-                      colorClass="text-teal-600 bg-teal-50"
-                      delay={100}
-                      icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M14.25 6.087c0-.355.186-.676.401-.959.221-.29.349-.634.349-1.003 0-1.036-1.007-1.875-2.25-1.875s-2.25.84-2.25 1.875c0 .369.128.713.349 1.003.215.283.401.604.401.959v0a.64.64 0 01-.657.643 48.39 48.39 0 01-4.163-.3c.186 1.613.293 3.25.315 4.907a.656.656 0 01-.658.663v0c-.355 0-.676-.186-.959-.401a1.638 1.638 0 00-1.003-.349c-1.036 0-1.875 1.007-1.875 2.25s.84 2.25 1.875 2.25c.369 0 .713-.128 1.003-.349.283-.215.604-.401.959-.401v0c.31 0 .555.26.532.57a48.039 48.039 0 01-.642 5.056c1.518.19 3.058.309 4.616.354a.64.64 0 00.657-.643v0c0-.355-.186-.676-.401-.959a1.638 1.638 0 00-.349-1.003c0-1.035 1.008-1.875 2.25-1.875 1.243 0 2.25.84 2.25 1.875 0 .369-.128.713-.349 1.003-.215.283-.401.604-.401.959v0c0 .333.277.599.61.58a48.1 48.1 0 005.427-.63 48.05 48.05 0 00.582-4.717.532.532 0 00-.533-.57v0c-.355 0-.676.186-.959.401-.29.221-.634.349-1.003.349-1.035 0-1.875-1.007-1.875-2.25s.84-2.25 1.875-2.25c.37 0 .713.128 1.003.349.283.215.604.401.959.401v0c.31 0 .555-.26.532-.57a48.039 48.039 0 01-.642-5.056c-1.518-.19-3.057-.309-4.616-.354a.64.64 0 00-.657.643v0z" /></svg>}
-                  />
-                  <CategoryCard 
-                      title="Reading" 
-                      subtitle="Comprehension" 
-                      stats={getCategoryStats(allReadingStories)}
-                      onClick={() => navigate('/exercise/reading')}
-                      colorClass="text-amber-600 bg-amber-50"
-                      delay={200}
-                      icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" /></svg>}
-                  />
-                  <CategoryCard 
-                      title="Listening" 
-                      subtitle="Audio Tasks" 
-                      stats={getCategoryStats(listeningStories)}
-                      onClick={() => navigate('/exercise/listening')}
-                      colorClass="text-cyan-600 bg-cyan-50"
-                      delay={250}
-                      icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" /></svg>}
-                  />
-                  <CategoryCard 
-                      title="Read Aloud" 
-                      subtitle="Phonetics" 
-                      stats={getCategoryStats(speakingStories)}
-                      onClick={() => navigate('/exercise/speaking')}
-                      colorClass="text-rose-600 bg-rose-50"
-                      delay={300}
-                      icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" /></svg>}
-                  />
-                  <CategoryCard 
-                      title="Speaking" 
-                      subtitle="Monologue" 
-                      stats={getCategoryStats(allOralStories)}
-                      onClick={() => navigate('/exercise/oral')}
-                      colorClass="text-purple-600 bg-purple-50"
-                      delay={400}
-                      icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242m9.345-8.334a2.126 2.126 0 00-.476-.095 48.64 48.64 0 00-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0011.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155" /></svg>}
-                  />
-                  <CategoryCard 
-                      title="Writing" 
-                      subtitle="Email Task" 
-                      stats={getCategoryStats(writingStories)}
-                      onClick={() => navigate('/exercise/writing')}
-                      colorClass="text-blue-600 bg-blue-50"
-                      delay={500}
-                      icon={<svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" /></svg>}
-                  />
-                </div>
-              </div>
-            )}
-            {userProfile.role === 'teacher' && !viewingStudentId && !selectedStudentForAssignment && (
-                <TeacherDashboard 
+                <StudentDashboard 
                     userProfile={userProfile}
-                    trackedStudents={trackedStudentsWithStatus}
-                    onAddStudent={handleAddStudent}
-                    onRemoveStudent={handleRemoveStudent}
-                    liveStudents={liveStudents}
-                    onlineUsers={onlineUsers}
-                    onStartLiveSession={startLiveSession}
-                    onEndLiveSession={endLiveSession}
-                    onPushExercise={pushExerciseToStudents}
-                    liveSessionActive={liveSessionActive}
-                    liveSessionCode={liveSessionCode}
-                    sessionParticipants={sessionParticipants}
-                    loading={loading}
-                    onAssignHomework={handleAssignHomework}
-                    onViewStudent={(id) => setViewingStudentId(id)}
+                    stats={{
+                        progressPercentage: activeProgressPercentage,
+                        totalCompleted: activeTotalCompleted,
+                        totalTasks: totalTasks
+                    }}
+                    homework={{
+                        pendingCount: activePendingHomeworkCount
+                    }}
+                    onNavigate={{
+                        toHomework: () => navigate('/homework'),
+                        toCategory: (type) => navigate(`/exercise/${type}`)
+                    }}
                 />
+              </div>
+            ) : (
+                <TeacherLayout
+                    students={trackedStudentsWithStatus}
+                    selectedStudentId={viewingStudentId}
+                    onSelectStudent={setViewingStudentId}
+                    onAddStudent={handleAddStudent}
+                >
+                    {viewingStudentId ? (
+                        <StudentDashboard 
+                            userProfile={viewingStudent || userProfile}
+                            stats={{
+                                progressPercentage: activeProgressPercentage,
+                                totalCompleted: activeTotalCompleted,
+                                totalTasks: totalTasks
+                            }}
+                            homework={{
+                                pendingCount: activePendingHomeworkCount
+                            }}
+                            onNavigate={{
+                                toHomework: () => navigate('/homework'),
+                                toCategory: (type) => navigate(`/exercise/${type}`)
+                            }}
+                            readOnly={true}
+                        />
+                    ) : (
+                        <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                            <svg className="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                            <p className="text-lg font-medium">Select a student to view their dashboard</p>
+                        </div>
+                    )}
+                </TeacherLayout>
             )}
+
           </>
         )
       } />
 
       <Route path="/homework" element={
-          <StudentHomeworkView 
-              assignments={activeHomework}
-              onStartExercise={(story, type) => startExercise(story, type, 'HOMEWORK')}
-              onBack={goHome}
-              onRefresh={() => userProfile.id && loadHomework(userProfile.id)}
-              loading={homeworkLoading}
-          />
+          viewingStudentId ? (
+            <TeacherLayout
+                students={trackedStudentsWithStatus}
+                selectedStudentId={viewingStudentId}
+                onSelectStudent={setViewingStudentId}
+                onAddStudent={handleAddStudent}
+            >
+                <StudentHomeworkView 
+                    assignments={activeHomework}
+                    onStartExercise={(story, type) => startExercise(story, type, 'HOMEWORK')}
+                    onBack={goHome}
+                    onRefresh={() => viewingStudentId && loadHomework(viewingStudentId)}
+                    loading={homeworkLoading}
+                    readOnly={true}
+                />
+            </TeacherLayout>
+          ) : (
+            <StudentHomeworkView 
+                assignments={activeHomework}
+                onStartExercise={(story, type) => startExercise(story, type, 'HOMEWORK')}
+                onBack={goHome}
+                onRefresh={() => userProfile.id && loadHomework(userProfile.id)}
+                loading={homeworkLoading}
+            />
+          )
       } />
 
-      <Route path="/exercise/grammar" element={<ExerciseList stories={grammarStories} type={ExerciseType.GRAMMAR} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
-      <Route path="/exercise/vocabulary" element={<ExerciseList stories={vocabStories} type={ExerciseType.VOCABULARY} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
-      <Route path="/exercise/reading" element={<ExerciseList stories={allReadingStories} type={ExerciseType.READING} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
-      <Route path="/exercise/listening" element={<ExerciseList stories={listeningStories} type={ExerciseType.LISTENING} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
-      <Route path="/exercise/speaking" element={<ExerciseList stories={speakingStories} type={ExerciseType.SPEAKING} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
-      <Route path="/exercise/oral" element={<ExerciseList stories={allOralStories} type={ExerciseType.ORAL_SPEECH} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
-      <Route path="/exercise/writing" element={<ExerciseList stories={writingStories} type={ExerciseType.WRITING} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
+      <Route path="/exercise/grammar" element={renderExerciseList(grammarStories, ExerciseType.GRAMMAR)} />
+      <Route path="/exercise/vocabulary" element={renderExerciseList(vocabStories, ExerciseType.VOCABULARY)} />
+      <Route path="/exercise/reading" element={renderExerciseList(allReadingStories, ExerciseType.READING)} />
+      <Route path="/exercise/listening" element={renderExerciseList(listeningStories, ExerciseType.LISTENING)} />
+      <Route path="/exercise/speaking" element={renderExerciseList(speakingStories, ExerciseType.SPEAKING)} />
+      <Route path="/exercise/oral" element={renderExerciseList(allOralStories, ExerciseType.ORAL_SPEECH)} />
+      <Route path="/exercise/writing" element={renderExerciseList(writingStories, ExerciseType.WRITING)} />
 
       <Route path="/exercise/:type/:title" element={<ExerciseRouteWrapper {...props} />} />
 
