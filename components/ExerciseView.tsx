@@ -1,8 +1,9 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Story, ExerciseType, UserProgress, ValidationState, UserProfile, AttemptDetail } from '../types';
+import { Story, ExerciseType, UserProgress, ValidationState, UserProfile, AttemptDetail, StudentResult } from '../types';
 import { getExplanation } from '../services/geminiService';
 import { supabase } from '../services/supabaseClient';
+import { ResultReview } from './ResultReview';
 
 interface ExerciseViewProps {
   story: Story;
@@ -13,9 +14,10 @@ interface ExerciseViewProps {
   readOnly?: boolean;
   initialInputs?: Record<string, string>;
   isLiveMonitoring?: boolean;
+  previousResult?: StudentResult | null;
 }
 
-const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComplete, userProfile, readOnly, initialInputs, isLiveMonitoring }) => {
+const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComplete, userProfile, readOnly, initialInputs, isLiveMonitoring, previousResult }) => {
   // --- Safety Guard: Ensure story exists ---
   if (!story) {
     return (
@@ -41,6 +43,11 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
           setInputs(initialInputs);
       }
   }, [initialInputs]);
+
+  // If previousResult is present, we are in review mode
+  const isReviewMode = !!previousResult;
+  const effectiveReadOnly = readOnly || isReviewMode;
+
   const [score, setScore] = useState(0);
   const [loadingExplanation, setLoadingExplanation] = useState<string | null>(null);
   const [explanations, setExplanations] = useState<{[key: string]: string}>({});
@@ -476,7 +483,9 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
         : 'Interview Session';
 
       let contextText = "";
-      if (story.speakingQuestions && story.speakingQuestions.length > 0) {
+      if (story.speakingType === 'read-aloud' && story.text) {
+          contextText = story.text;
+      } else if (story.speakingQuestions && story.speakingQuestions.length > 0) {
           contextText = story.speakingQuestions.map((q, i) => `${i + 1}) ${q}`).join('\n');
       }
 
@@ -1221,8 +1230,8 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                               <button
                                                   key={idx}
                                                   onClick={() => handleInputChange(key, (idx + 1).toString())}
-                                                  disabled={isSectionChecked}
-                                                  className={`py-3 px-4 rounded-xl text-sm font-bold transition-all border-2 text-left flex items-center gap-3 ${btnClass}`}
+                                                  disabled={isSectionChecked || effectiveReadOnly}
+                                                  className={`py-3 px-4 rounded-xl text-sm font-bold transition-all border-2 text-left flex items-center gap-3 ${btnClass} ${effectiveReadOnly ? 'cursor-not-allowed opacity-70' : ''}`}
                                               >
                                                   <span className="w-6 h-6 rounded-full border border-current flex items-center justify-center text-xs opacity-70 shrink-0">
                                                       {idx + 1}
@@ -1287,8 +1296,8 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                                   <button
                                                       key={num}
                                                       onClick={() => handleInputChange(key, num)}
-                                                      disabled={isSectionChecked}
-                                                      className={`w-8 h-8 rounded-lg text-sm font-bold transition-all ${btnClass}`}
+                                                      disabled={isSectionChecked || effectiveReadOnly}
+                                                      className={`w-8 h-8 rounded-lg text-sm font-bold transition-all ${btnClass} ${effectiveReadOnly ? 'cursor-not-allowed opacity-70' : ''}`}
                                                   >
                                                       {num}
                                                   </button>
@@ -1323,12 +1332,12 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                                   type="text"
                                                   value={inputs[key] || ''}
                                                   onChange={(e) => handleInputChange(key, e.target.value)}
-                                                  disabled={isSectionChecked || readOnly}
+                                                  disabled={isSectionChecked || effectiveReadOnly}
                                                   className={`w-full px-3 py-2 rounded-lg border-2 outline-none font-bold transition-all ${
                                                       isCorrect === true ? 'border-emerald-400 bg-emerald-50 text-emerald-800' :
                                                       isCorrect === false ? 'border-rose-400 bg-rose-50 text-rose-800' :
                                                       'border-slate-200 focus:border-cyan-500 focus:bg-white'
-                                                  } ${readOnly ? 'opacity-70 cursor-not-allowed' : ''}`}
+                                                  } ${effectiveReadOnly ? 'opacity-70 cursor-not-allowed' : ''}`}
                                               />
                                               {isSectionChecked && !isCorrect && (
                                                   <div className="text-xs text-emerald-600 mt-1 font-bold">
@@ -1470,8 +1479,8 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                             {task.word}
                         </span>
                         <input type="text" value={userAnswer} onChange={(e) => handleInputChange(taskIndex.toString(), e.target.value)} placeholder={hasValue ? '' : task.word}
-                            className={`h-10 px-3 min-w-[140px] text-center font-semibold rounded-lg border-2 outline-none transition-all duration-200 placeholder:text-slate-400 placeholder:font-bold placeholder:tracking-wide placeholder:uppercase placeholder:opacity-60 ${isCorrect === true ? 'border-emerald-400 bg-emerald-50 text-emerald-800' : isCorrect === false ? 'border-rose-400 bg-rose-50 text-rose-800' : 'border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10'} ${readOnly ? 'opacity-70 cursor-not-allowed' : ''}`}
-                            disabled={showResults || readOnly} autoComplete="off" spellCheck="false"
+                            className={`h-10 px-3 min-w-[140px] text-center font-semibold rounded-lg border-2 outline-none transition-all duration-200 placeholder:text-slate-400 placeholder:font-bold placeholder:tracking-wide placeholder:uppercase placeholder:opacity-60 ${isCorrect === true ? 'border-emerald-400 bg-emerald-50 text-emerald-800' : isCorrect === false ? 'border-rose-400 bg-rose-50 text-rose-800' : 'border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10'} ${effectiveReadOnly ? 'opacity-70 cursor-not-allowed' : ''}`}
+                            disabled={showResults || effectiveReadOnly} autoComplete="off" spellCheck="false"
                         />
                         {showResults && !isCorrect && (
                             <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 z-20 hidden group-hover:block w-48">
@@ -1537,7 +1546,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                         btnClass = "bg-indigo-600 text-white shadow-md ring-2 ring-indigo-200 border-indigo-600";
                                     }
                                     return (
-                                        <button key={num} onClick={() => handleReadingSelection(textItem.letter, num)} disabled={showResults || readOnly} className={`w-10 h-10 rounded-xl text-sm font-bold transition-all flex items-center justify-center ${btnClass} ${readOnly ? 'opacity-70 cursor-not-allowed' : ''}`}>
+                                        <button key={num} onClick={() => handleReadingSelection(textItem.letter, num)} disabled={showResults || effectiveReadOnly} className={`w-10 h-10 rounded-xl text-sm font-bold transition-all flex items-center justify-center ${btnClass} ${effectiveReadOnly ? 'opacity-70 cursor-not-allowed' : ''}`}>
                                             {num}
                                         </button>
                                     );
@@ -1584,7 +1593,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                           btnClass = "bg-indigo-50 border-indigo-500 text-indigo-700 shadow-sm ring-1 ring-indigo-200";
                                       }
                                       return (
-                                          <button key={idx} onClick={() => handleTrueFalseSelection(q.id, idx)} disabled={showResults || readOnly} className={`py-3 rounded-xl text-sm font-bold transition-all border-2 flex items-center justify-center gap-2 ${btnClass} ${readOnly ? 'opacity-70 cursor-not-allowed' : ''}`}>
+                                          <button key={idx} onClick={() => handleTrueFalseSelection(q.id, idx)} disabled={showResults || effectiveReadOnly} className={`py-3 rounded-xl text-sm font-bold transition-all border-2 flex items-center justify-center gap-2 ${btnClass} ${effectiveReadOnly ? 'opacity-70 cursor-not-allowed' : ''}`}>
                                               {opt}
                                           </button>
                                       );
@@ -1630,39 +1639,71 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-8">
-        {!showResults && type !== ExerciseType.WRITING && type !== ExerciseType.SPEAKING && type !== ExerciseType.ORAL_SPEECH && type !== ExerciseType.LISTENING && (
-            <div className="mb-8 bg-indigo-50 border border-indigo-100 rounded-2xl p-5 flex items-start gap-4">
-                <div className="p-2 bg-indigo-100 rounded-lg text-indigo-600 mt-1">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        {isReviewMode && previousResult ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div className="order-2 lg:order-1">
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 mb-6">
+                        <h3 className="font-bold text-slate-800 mb-4 text-lg">Exercise Content</h3>
+                        {/* Render the content in read-only mode for context */}
+                        <div className="opacity-80 pointer-events-none select-none grayscale-[0.5]">
+                            {type === ExerciseType.WRITING && (
+                                <div className="prose prose-slate">
+                                    <p>{story.emailBody}</p>
+                                </div>
+                            )}
+                            {(type === ExerciseType.GRAMMAR || type === ExerciseType.VOCABULARY) && renderGrammarTemplate()}
+                            {type === ExerciseType.READING && (story.questions ? renderTrueFalse() : renderReadingMatching())}
+                            {type === ExerciseType.LISTENING && renderListening()}
+                            {/* Speaking content is usually just audio/prompt, which ResultReview covers or is less visual */}
+                        </div>
+                    </div>
                 </div>
-                <div>
-                    <h4 className="font-bold text-indigo-900 text-sm mb-1">Instructions</h4>
-                    <p className="text-indigo-800/80 text-sm leading-relaxed">
-                        {type === ExerciseType.GRAMMAR ? "Transform the words in capital letters to complete the text grammatically." :
-                         type === ExerciseType.VOCABULARY ? "Form new words from the capitalized ones to fit the context." :
-                         type === ExerciseType.READING ? "Read the text carefully and answer the questions or match headings." :
-                         "Follow the task guidelines."}
-                    </p>
+                <div className="order-1 lg:order-2">
+                    <ResultReview 
+                        details={previousResult.details} 
+                        score={previousResult.score} 
+                        maxScore={previousResult.max_score} 
+                        type={type} 
+                    />
                 </div>
             </div>
-        )}
-        
-        {type === ExerciseType.WRITING && renderWritingLayout()}
-        {(type === ExerciseType.SPEAKING || type === ExerciseType.ORAL_SPEECH) && renderSpeaking()}
-        
-        {(type === ExerciseType.GRAMMAR || type === ExerciseType.VOCABULARY) && renderGrammarTemplate()}
-        
-        {type === ExerciseType.READING && (
-            story.questions ? renderTrueFalse() : renderReadingMatching()
-        )}
+        ) : (
+            <>
+                {!showResults && type !== ExerciseType.WRITING && type !== ExerciseType.SPEAKING && type !== ExerciseType.ORAL_SPEECH && type !== ExerciseType.LISTENING && (
+                    <div className="mb-8 bg-indigo-50 border border-indigo-100 rounded-2xl p-5 flex items-start gap-4">
+                        <div className="p-2 bg-indigo-100 rounded-lg text-indigo-600 mt-1">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        </div>
+                        <div>
+                            <h4 className="font-bold text-indigo-900 text-sm mb-1">Instructions</h4>
+                            <p className="text-indigo-800/80 text-sm leading-relaxed">
+                                {type === ExerciseType.GRAMMAR ? "Transform the words in capital letters to complete the text grammatically." :
+                                type === ExerciseType.VOCABULARY ? "Form new words from the capitalized ones to fit the context." :
+                                type === ExerciseType.READING ? "Read the text carefully and answer the questions or match headings." :
+                                "Follow the task guidelines."}
+                            </p>
+                        </div>
+                    </div>
+                )}
+                
+                {type === ExerciseType.WRITING && renderWritingLayout()}
+                {(type === ExerciseType.SPEAKING || type === ExerciseType.ORAL_SPEECH) && renderSpeaking()}
+                
+                {(type === ExerciseType.GRAMMAR || type === ExerciseType.VOCABULARY) && renderGrammarTemplate()}
+                
+                {type === ExerciseType.READING && (
+                    story.questions ? renderTrueFalse() : renderReadingMatching()
+                )}
 
-        {type === ExerciseType.LISTENING && renderListening()}
-        
-        {/* Fallback for unknown types */}
-        {!Object.values(ExerciseType).includes(type) && (
-            <div className="text-center p-10 text-slate-400">
-                Unknown exercise type. Please contact support.
-            </div>
+                {type === ExerciseType.LISTENING && renderListening()}
+                
+                {/* Fallback for unknown types */}
+                {!Object.values(ExerciseType).includes(type) && (
+                    <div className="text-center p-10 text-slate-400">
+                        Unknown exercise type. Please contact support.
+                    </div>
+                )}
+            </>
         )}
       </div>
     </div>

@@ -160,7 +160,8 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
                     return (
                         <div 
                         key={task.id} 
-                        className={`bg-white rounded-2xl p-6 shadow-sm border border-slate-100 hover:shadow-lg hover:border-indigo-100 transition-all duration-300 flex flex-col relative overflow-hidden group h-full ${task.status === 'completed' ? 'opacity-75 grayscale-[0.5] hover:grayscale-0' : ''}`}
+                        onClick={() => story && onStartExercise(story, task.exercise_type as ExerciseType)}
+                        className={`bg-white rounded-2xl p-6 shadow-sm border border-slate-100 hover:shadow-lg hover:border-indigo-100 transition-all duration-300 flex flex-col relative overflow-hidden group h-full cursor-pointer ${task.status === 'completed' ? 'opacity-75 grayscale-[0.5] hover:grayscale-0' : ''}`}
                         >
                         {getStatusBadge(task.status, task.due_date)}
 
@@ -192,15 +193,12 @@ const StudentHomeworkView: React.FC<StudentHomeworkViewProps> = ({ assignments, 
                             </span>
 
                             {task.status !== 'completed' && story ? (
-                                !readOnly && (
                                 <button 
-                                    onClick={() => onStartExercise(story, task.exercise_type as ExerciseType)}
                                     className="group-hover:translate-x-1 transition-transform text-indigo-600 font-bold flex items-center gap-1"
                                 >
-                                    Start
+                                    {readOnly ? 'View' : 'Start'}
                                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                                 </button>
-                                )
                             ) : (
                                 task.score !== undefined && (
                                     <span className="font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded">

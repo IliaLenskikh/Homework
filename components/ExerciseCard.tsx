@@ -72,7 +72,7 @@ const ExerciseCard: React.FC<ExerciseCardProps> = ({ story, type, onClick, isCom
       )}
 
       {/* Main Click Area */}
-      <div onClick={readOnly ? undefined : onClick} className="flex-1">
+      <div onClick={onClick} className="flex-1">
         <span className={`inline-block px-3 py-1 rounded-lg text-xs font-bold uppercase tracking-wide border mb-4 ${badgeStyle}`}>
             {type === ExerciseType.READING && story.questions ? 'True/False' : 
              type === ExerciseType.ORAL_SPEECH ? (story.speakingType === 'interview' ? 'Interview' : 'Monologue') : type}
@@ -126,15 +126,13 @@ const ExerciseCard: React.FC<ExerciseCardProps> = ({ story, type, onClick, isCom
                 )}
               </button>
             )}
-            {!readOnly && (
             <button 
                 onClick={onClick}
                 className="group-hover:translate-x-1 transition-transform text-indigo-500 font-bold opacity-0 group-hover:opacity-100 flex items-center gap-1"
             >
-                Start
+                {readOnly ? 'View' : 'Start'}
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" /></svg>
             </button>
-            )}
          </div>
       </div>
     </div>

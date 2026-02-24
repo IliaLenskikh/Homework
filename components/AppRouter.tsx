@@ -110,6 +110,10 @@ interface AppRouterProps {
   studentHomeworkList: HomeworkAssignment[];
 }
 
+import { useState, useEffect } from 'react';
+import { supabase } from '../services/supabaseClient';
+import { StudentResult } from '../types';
+
 const ExerciseRouteWrapper: React.FC<AppRouterProps> = (props) => {
   const { type, title } = useParams<{ type: string; title: string }>();
   const navigate = useNavigate();
@@ -120,6 +124,34 @@ const ExerciseRouteWrapper: React.FC<AppRouterProps> = (props) => {
   const exerciseType = type as ExerciseType;
   
   const story = allStories.find(s => s.title === decodedTitle && s.type === exerciseType);
+
+  const [previousResult, setPreviousResult] = useState<StudentResult | null>(null);
+
+  useEffect(() => {
+      const fetchResult = async () => {
+          if (!props.userProfile?.id || !story) return;
+          
+          const targetStudentId = props.viewingStudentId || props.userProfile.id;
+
+          const { data } = await supabase
+              .from('student_results')
+              .select('*')
+              .eq('student_id', targetStudentId)
+              .eq('exercise_title', story.title)
+              .eq('exercise_type', exerciseType)
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .single();
+          
+          if (data) {
+              setPreviousResult(data as StudentResult);
+          } else {
+              setPreviousResult(null);
+          }
+      };
+      
+      fetchResult();
+  }, [story, exerciseType, props.userProfile.id, props.viewingStudentId]);
 
   if (!story) return <div className="p-8 text-center text-slate-500">Story not found</div>;
 
@@ -134,6 +166,7 @@ const ExerciseRouteWrapper: React.FC<AppRouterProps> = (props) => {
       onComplete={(score, maxScore, details) => props.handleStoryComplete(story.title, exerciseType, score, maxScore, details)}
       userProfile={props.userProfile}
       readOnly={!!props.viewingStudentId}
+      previousResult={previousResult}
     />
   );
 
