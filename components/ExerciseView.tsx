@@ -39,9 +39,12 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   const [showTranscript, setShowTranscript] = useState<{[key: number]: boolean}>({});
   
   // Speaking State - General
-  const [speakingPhase, setSpeakingPhase] = useState<'IDLE' | 'PREPARING' | 'RECORDING' | 'FINISHED' | 'UPLOADING'>('IDLE');
+  const [speakingPhase, setSpeakingPhase] = useState<'IDLE' | 'PREPARING' | 'COUNTDOWN' | 'RECORDING' | 'REVIEW' | 'FINISHED' | 'UPLOADING'>('IDLE');
   const [timer, setTimer] = useState(0);
   const timerRef = useRef<number | null>(null);
+
+  const [attempts, setAttempts] = useState<{ blob: Blob; url: string; timestamp: string }[]>([]);
+  const [selectedAttemptIndex, setSelectedAttemptIndex] = useState<number | null>(null);
 
   // Interview Specific State
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
@@ -312,6 +315,23 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
               }
           };
 
+          mediaRecorder.onstop = () => {
+              const blob = new Blob(audioChunksRef.current, { type: mimeType });
+              if (blob.size < 100) {
+                  setRecordingError("Recording too short or empty. Please try again.");
+                  setSpeakingPhase('IDLE');
+                  return;
+              }
+              const url = URL.createObjectURL(blob);
+              const timestamp = new Date().toLocaleTimeString();
+              setAttempts(prev => {
+                  const newAttempts = [...prev, { blob, url, timestamp }];
+                  if (newAttempts.length === 1) setSelectedAttemptIndex(0);
+                  return newAttempts;
+              });
+              setSpeakingPhase('REVIEW');
+          };
+
           mediaRecorder.start();
           setIsMicActive(true);
           setIsPaused(false);
@@ -349,12 +369,19 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
     }); 
   };
 
+  const startReadAloudCountdown = () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setSpeakingPhase('COUNTDOWN');
+    startTimer(5, startReadAloudRecording);
+  };
+
   const startReadAloudRecording = async () => {
+    if (timerRef.current) clearInterval(timerRef.current);
     const started = await startRecordingSystem();
     if (started) {
         setSpeakingPhase('RECORDING');
         setTimer(120); 
-        startTimer(120, () => finishSpeaking(true));
+        startTimer(120, () => finishSpeaking());
     }
   };
 
@@ -364,12 +391,19 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       startTimer(90, () => setSpeakingPhase('IDLE')); 
   }
 
+  const startMonologueCountdown = () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setSpeakingPhase('COUNTDOWN');
+    startTimer(5, startMonologueRecordingSession);
+  };
+
   const startMonologueRecordingSession = async () => {
+      if (timerRef.current) clearInterval(timerRef.current);
       const started = await startRecordingSystem();
       if (started) {
           setSpeakingPhase('RECORDING');
           setTimer(120); 
-          startTimer(120, () => stopRecording(true)); 
+          startTimer(120, () => stopRecording()); 
       }
   };
 
@@ -406,59 +440,24 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
   const handleFinishInterview = async () => {
       if (timerRef.current) clearInterval(timerRef.current);
       stopRecordingSystem();
-      setTimeout(() => handleAudioUpload(), 500); // Increased timeout to ensure chunks are processed
   };
 
   const handleAudioUpload = async () => {
       setSpeakingPhase('UPLOADING');
       
-      // Safety check for empty recording
-      if (!audioChunksRef.current || audioChunksRef.current.length === 0) {
-          setRecordingError("Recording failed: No audio data captured. Please try again.");
-          setSpeakingPhase('IDLE');
-          return;
+      const blobsToUpload: { blob: Blob; label: string }[] = [];
+      if (selectedAttemptIndex !== null) {
+          blobsToUpload.push({ blob: attempts[selectedAttemptIndex].blob, label: 'Selected Attempt' });
+      } else {
+          // If none selected, upload all attempts
+          attempts.forEach((att, idx) => {
+              blobsToUpload.push({ blob: att.blob, label: `Attempt ${idx + 1}` });
+          });
       }
 
-      const blob = new Blob(audioChunksRef.current, { type: mimeType });
-      
-      if (blob.size < 100) { // Check for meaningful size
-          setRecordingError("Recording too short or empty. Please check your microphone.");
+      if (blobsToUpload.length === 0) {
+          setRecordingError("No recordings to upload.");
           setSpeakingPhase('IDLE');
-          return;
-      }
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const userIdentifier = userProfile?.email || 'anonymous';
-      const cleanTitle = story.title.replace(/[^a-zA-Z0-9]/g, '_');
-      
-      let extension = 'webm';
-      if (mimeType.includes('mp4')) extension = 'mp4';
-      if (mimeType.includes('wav')) extension = 'wav';
-      if (mimeType.includes('ogg')) extension = 'ogg';
-
-      const fileName = `${userIdentifier}/${cleanTitle}/${timestamp}.${extension}`;
-      let publicUrl = "";
-
-      try {
-          const { data, error } = await supabase.storage
-              .from('audio-responses')
-              .upload(fileName, blob, {
-                  upsert: true,
-                  contentType: mimeType
-              });
-
-          if (error) throw error;
-
-          const { data: urlData } = supabase.storage
-              .from('audio-responses')
-              .getPublicUrl(fileName);
-          
-          publicUrl = urlData.publicUrl;
-
-      } catch (e: any) {
-          console.error("Upload error", e);
-          setRecordingError("Failed to upload audio. Please try again.");
-          setSpeakingPhase('IDLE'); 
           return;
       }
 
@@ -472,17 +471,52 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
           contextText = story.speakingQuestions.map((q, i) => `${i + 1}) ${q}`).join('\n');
       }
 
-      const details: AttemptDetail[] = [{
-          question: taskLabel,
-          userAnswer: "Audio Response Recorded",
-          correctAnswer: "Teacher Review",
-          isCorrect: null, 
-          audioUrl: publicUrl,
-          context: contextText
-      }];
+      const details: AttemptDetail[] = [];
 
-      setSpeakingPhase('FINISHED');
-      onComplete(10, 10, details);
+      try {
+          for (const item of blobsToUpload) {
+              const timestamp = new Date().getTime() + Math.random();
+              const userIdentifier = userProfile?.email || 'anonymous';
+              const cleanTitle = story.title.replace(/[^a-zA-Z0-9]/g, '_');
+              
+              let extension = 'webm';
+              if (mimeType.includes('mp4')) extension = 'mp4';
+              if (mimeType.includes('wav')) extension = 'wav';
+              if (mimeType.includes('ogg')) extension = 'ogg';
+
+              const fileName = `${userIdentifier}/${cleanTitle}/${timestamp}.${extension}`;
+
+              const { error } = await supabase.storage
+                  .from('audio-responses')
+                  .upload(fileName, item.blob, {
+                      upsert: true,
+                      contentType: mimeType
+                  });
+
+              if (error) throw error;
+
+              const { data: urlData } = supabase.storage
+                  .from('audio-responses')
+                  .getPublicUrl(fileName);
+              
+              details.push({
+                  question: `${taskLabel} (${item.label})`,
+                  userAnswer: "Audio Response Recorded",
+                  correctAnswer: "Teacher Review",
+                  isCorrect: null, 
+                  audioUrl: urlData.publicUrl,
+                  context: contextText
+              });
+          }
+
+          setSpeakingPhase('FINISHED');
+          onComplete(10, 10, details);
+
+      } catch (e: any) {
+          console.error("Upload error", e);
+          setRecordingError("Failed to upload audio. Please try again.");
+          setSpeakingPhase('REVIEW'); 
+      }
   };
 
   const startTimer = (duration: number, onComplete: () => void) => {
@@ -500,21 +534,13 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
     }, 1000);
   };
 
-  const stopRecording = (autoUpload: boolean = false) => {
+  const stopRecording = () => {
       if (timerRef.current) clearInterval(timerRef.current);
       stopRecordingSystem();
-      if (autoUpload) {
-          setTimeout(handleAudioUpload, 500);
-      } else {
-          setSpeakingPhase('IDLE'); 
-      }
   };
 
-  const finishSpeaking = (autoUpload: boolean = true) => {
-    stopRecording(false);
-    if (autoUpload) {
-        setTimeout(handleAudioUpload, 500);
-    }
+  const finishSpeaking = () => {
+    stopRecording();
   };
 
   const handleInputChange = (key: string, value: string) => {
@@ -536,6 +562,77 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
 
   const handleTrueFalseSelection = (questionId: number, optionIndex: number) => {
     handleInputChange(questionId.toString(), (optionIndex + 1).toString());
+  };
+
+  const renderSpeakingReview = () => {
+      const canRerecord = attempts.length < 2;
+      
+      return (
+          <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 mb-8 w-full max-w-2xl mx-auto">
+              <div className="flex items-center justify-between mb-6">
+                  <h3 className="text-xl font-bold text-slate-800">Review Your Recording</h3>
+                  <div className="px-3 py-1 bg-indigo-100 text-indigo-600 rounded-full text-xs font-bold uppercase tracking-wider">
+                      {attempts.length} {attempts.length === 1 ? 'Attempt' : 'Attempts'}
+                  </div>
+              </div>
+              
+              <div className="space-y-4 mb-8">
+                  {attempts.map((att, idx) => (
+                      <div 
+                          key={idx} 
+                          className={`p-5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col sm:flex-row items-center justify-between gap-4 ${selectedAttemptIndex === idx ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-100 hover:border-slate-200 bg-slate-50/30'}`}
+                          onClick={() => setSelectedAttemptIndex(idx)}
+                      >
+                          <div className="flex items-center gap-4 w-full sm:w-auto">
+                              <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 ${selectedAttemptIndex === idx ? 'border-indigo-500 bg-indigo-500 text-white' : 'border-slate-300 bg-white'}`}>
+                                  {selectedAttemptIndex === idx && <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"/></svg>}
+                              </div>
+                              <div>
+                                  <p className="font-bold text-slate-700">Attempt {idx + 1}</p>
+                                  <p className="text-[10px] text-slate-400 uppercase font-bold tracking-tight">{att.timestamp}</p>
+                              </div>
+                          </div>
+                          <audio src={att.url} controls className="h-10 w-full sm:w-48" />
+                      </div>
+                  ))}
+              </div>
+
+              <div className="flex flex-col gap-4">
+                  <div className="flex flex-col sm:flex-row gap-4">
+                      {canRerecord ? (
+                          <button 
+                              onClick={() => {
+                                  setSpeakingPhase('IDLE');
+                                  setTimer(0);
+                              }}
+                              className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 px-6 py-4 rounded-2xl font-bold transition-all active:scale-95"
+                          >
+                              Rerecord
+                          </button>
+                      ) : (
+                          <div className="flex-1 bg-slate-50 text-slate-400 px-6 py-4 rounded-2xl font-bold text-center border border-dashed border-slate-200 cursor-not-allowed">
+                              No more attempts
+                          </div>
+                      )}
+                      <button 
+                          onClick={handleAudioUpload}
+                          className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-4 rounded-2xl font-bold shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2"
+                      >
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                          Submit
+                      </button>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-100 p-3 rounded-xl">
+                      <p className="text-xs text-amber-700 text-center leading-relaxed">
+                          <span className="font-bold">Note:</span> {canRerecord ? "You can rerecord only once." : "You have used your single rerecord attempt."}
+                          {attempts.length > 1 && selectedAttemptIndex === null && (
+                              <span className="block mt-1 font-medium">Both recordings will be submitted if you don't choose one.</span>
+                          )}
+                      </p>
+                  </div>
+              </div>
+          </div>
+      );
   };
 
   const handleEmailChange = (text: string) => {
@@ -818,13 +915,17 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
           )
       }
 
-      if (type === ExerciseType.SPEAKING || subtype === 'read-aloud') {
+      if (subtype === 'read-aloud') {
           return (
               <div className="max-w-3xl mx-auto py-10">
-                  <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 mb-8 flex flex-col md:flex-row justify-between items-center gap-8">
+                  {speakingPhase === 'REVIEW' ? (
+                      renderSpeakingReview()
+                  ) : (
+                      <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 mb-8 flex flex-col md:flex-row justify-between items-center gap-8">
                       <div className="flex items-center gap-6">
                           <div className={`w-24 h-24 rounded-full flex items-center justify-center text-3xl font-bold border-[6px] transition-all duration-500 font-mono
                               ${speakingPhase === 'PREPARING' ? 'border-amber-400 text-amber-600 scale-110' :
+                                speakingPhase === 'COUNTDOWN' ? 'border-indigo-500 text-indigo-600 scale-125 animate-pulse' :
                                 speakingPhase === 'RECORDING' ? 'border-rose-500 text-rose-600 scale-110 animate-pulse' :
                                 speakingPhase === 'FINISHED' ? 'border-emerald-400 text-emerald-600' :
                                 'border-slate-100 text-slate-300'}
@@ -836,6 +937,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                               <div className="font-bold text-2xl text-slate-800">
                                   {speakingPhase === 'IDLE' && 'Ready to start?'}
                                   {speakingPhase === 'PREPARING' && 'Prepare...'}
+                                  {speakingPhase === 'COUNTDOWN' && 'Get ready!'}
                                   {speakingPhase === 'RECORDING' && 'Recording!'}
                                   {speakingPhase === 'UPLOADING' && 'Saving...'}
                                   {speakingPhase === 'FINISHED' && 'Done'}
@@ -848,21 +950,21 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                               <button onClick={startReadAloudPreparation} className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95">Start Preparation</button>
                           )}
                           {speakingPhase === 'PREPARING' && (
-                              <button onClick={() => { 
-                                  // Skip prep
-                                  if (timerRef.current) clearInterval(timerRef.current);
-                                  setSpeakingPhase('IDLE');
-                              }} className="bg-slate-200 hover:bg-slate-300 text-slate-600 px-6 py-4 rounded-2xl font-bold transition-all">Skip Prep</button>
+                              <button onClick={startReadAloudCountdown} className="bg-slate-200 hover:bg-slate-300 text-slate-600 px-6 py-4 rounded-2xl font-bold transition-all">Skip Prep</button>
+                          )}
+                          {speakingPhase === 'COUNTDOWN' && (
+                              <div className="text-indigo-600 font-bold px-8 py-4">Starting in {timer}...</div>
                           )}
                           {/* After prep (IDLE again) show Start Recording */}
                           {speakingPhase === 'IDLE' && timer === 0 && (
                               <button onClick={startReadAloudRecording} className="bg-emerald-500 hover:bg-emerald-600 text-white px-8 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95">Start Recording</button>
                           )}
                           {speakingPhase === 'RECORDING' && (
-                              <button onClick={() => finishSpeaking(true)} className="bg-rose-500 hover:bg-rose-600 text-white px-8 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95">Stop Recording</button>
+                              <button onClick={() => finishSpeaking()} className="bg-rose-500 hover:bg-rose-600 text-white px-8 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95">Stop Recording</button>
                           )}
                       </div>
-                  </div>
+                      </div>
+                  )}
                   <div className={`bg-white p-10 md:p-14 rounded-3xl shadow-sm border transition-all duration-500 ${speakingPhase === 'RECORDING' ? 'border-rose-200 ring-4 ring-rose-50' : 'border-slate-100'}`}>
                       <p className="text-xl md:text-2xl leading-[2] text-slate-800 font-medium">{story.text}</p>
                   </div>
@@ -873,7 +975,11 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
       if (subtype === 'interview') {
           return (
               <div className="max-w-3xl mx-auto py-10">
-                  {story.audioUrl && (
+                  {speakingPhase === 'REVIEW' ? (
+                      renderSpeakingReview()
+                  ) : (
+                      <>
+                          {story.audioUrl && (
                       <div className="mb-8 p-4 bg-slate-50 rounded-2xl border border-slate-200">
                           <p className="text-sm font-bold text-slate-500 mb-2 uppercase tracking-wider">Audio Question</p>
                           <audio ref={audioRef} controls src={story.audioUrl} className="w-full" />
@@ -945,14 +1051,20 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                           </div>
                       )}
                   </div>
+                  </>
+                  )}
               </div>
           );
       }
 
       if (subtype === 'monologue') {
           return (
-              <div className="max-w-4xl mx-auto py-10 grid md:grid-cols-2 gap-8">
-                  <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
+              <div className="max-w-4xl mx-auto py-10">
+                  {speakingPhase === 'REVIEW' ? (
+                      renderSpeakingReview()
+                  ) : (
+                      <div className="grid md:grid-cols-2 gap-8">
+                          <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
                       <h2 className="text-xl font-bold text-slate-900 mb-4">{story.title}</h2>
                       <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
                           <p className="text-slate-700 font-medium mb-4">{story.text}</p>
@@ -967,19 +1079,19 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                       </div>
                   </div>
                   <div className="flex flex-col justify-center gap-6 bg-white p-8 rounded-3xl shadow-xl border border-slate-100 text-center">
-                      <div className="text-4xl font-bold font-mono mb-6">{String(Math.floor(timer/60))}:{String(timer%60).padStart(2,'0')}</div>
+                      <div className={`text-4xl font-bold font-mono mb-6 transition-all duration-300 ${speakingPhase === 'COUNTDOWN' ? 'text-indigo-600 scale-150' : 'text-slate-900'}`}>
+                          {String(Math.floor(timer/60))}:{String(timer%60).padStart(2,'0')}
+                      </div>
                       
                       {speakingPhase === 'UPLOADING' && <div className="text-slate-500 font-bold animate-pulse">Uploading...</div>}
+                      {speakingPhase === 'COUNTDOWN' && <div className="text-indigo-600 font-bold animate-bounce mb-4">Get ready!</div>}
 
                       {speakingPhase === 'IDLE' && (
                           <button onClick={startMonologuePreparation} className="bg-indigo-600 text-white px-6 py-4 rounded-2xl font-bold shadow-lg">Start Preparation</button>
                       )}
                       
                       {speakingPhase === 'PREPARING' && (
-                          <button onClick={() => {
-                              if(timerRef.current) clearInterval(timerRef.current);
-                              setSpeakingPhase('IDLE');
-                          }} className="bg-slate-200 text-slate-600 px-6 py-4 rounded-2xl font-bold shadow-sm">Skip & Ready</button>
+                          <button onClick={startMonologueCountdown} className="bg-slate-200 text-slate-600 px-6 py-4 rounded-2xl font-bold shadow-sm">Skip & Ready</button>
                       )}
                       
                       {speakingPhase === 'IDLE' && timer === 0 && (
@@ -987,11 +1099,13 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                       )}
                       
                       {speakingPhase === 'RECORDING' && (
-                          <button onClick={() => stopRecording(true)} className="bg-rose-500 text-white px-6 py-4 rounded-2xl font-bold shadow-lg">Finish & Save</button>
+                          <button onClick={() => stopRecording()} className="bg-rose-500 text-white px-6 py-4 rounded-2xl font-bold shadow-lg">Finish & Save</button>
                       )}
                   </div>
+                  </div>
+                  )}
               </div>
-          )
+          );
       }
       
       return (
