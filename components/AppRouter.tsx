@@ -539,6 +539,7 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
                         totalCompleted: activeTotalCompleted,
                         totalTasks: totalTasks
                     }}
+                    completedStories={activeCompletedStories}
                     homework={{
                         pendingCount: activePendingHomeworkCount
                     }}
@@ -563,6 +564,7 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
                                 totalCompleted: activeTotalCompleted,
                                 totalTasks: totalTasks
                             }}
+                            completedStories={activeCompletedStories}
                             homework={{
                                 pendingCount: activePendingHomeworkCount
                             }}

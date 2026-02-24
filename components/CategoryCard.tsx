@@ -36,8 +36,8 @@ export const CategoryCard: React.FC<CategoryCardProps> = ({
 
   return (
     <div
-      onClick={readOnly ? undefined : onClick}
-      className={`bg-white p-8 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-start gap-4 h-full group relative ${readOnly ? 'cursor-default opacity-90' : 'hover:shadow-xl transition-all duration-300 cursor-pointer'}`}
+      onClick={onClick}
+      className={`bg-white p-8 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-start gap-4 h-full group relative hover:shadow-xl transition-all duration-300 cursor-pointer ${readOnly ? 'opacity-90' : ''}`}
       style={{ animationDelay: `${delay}ms` }}
     >
       <div className="absolute top-4 right-4 flex items-center gap-2">
