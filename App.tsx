@@ -96,6 +96,24 @@ export default function App() {
   // Teacher Dashboard State
   const [trackedStudents, setTrackedStudents] = useState<TrackedStudent[]>([]);
   const [studentHomework, setStudentHomework] = useState<HomeworkAssignment[]>([]);
+  const [viewingStudentId, setViewingStudentId] = useState<string | null>(null);
+  const [studentCompletedStories, setStudentCompletedStories] = useState<Set<string>>(new Set());
+  const [studentHomeworkList, setStudentHomeworkList] = useState<HomeworkAssignment[]>([]);
+
+  useEffect(() => {
+    if (viewingStudentId) {
+      supabase.from('profiles').select('completed_stories').eq('id', viewingStudentId).single().then(({ data }) => {
+        if (data) {
+          setStudentCompletedStories(new Set(data.completed_stories || []));
+        }
+      });
+      supabase.from('homework_assignments').select('*').eq('student_id', viewingStudentId).then(({ data }) => {
+        if (data) {
+          setStudentHomeworkList(data as HomeworkAssignment[]);
+        }
+      });
+    }
+  }, [viewingStudentId]);
   
   // Live Session Hooks
   const {
@@ -655,6 +673,10 @@ export default function App() {
               progressPercentage={progressPercentage}
               totalCompleted={totalCompleted}
               totalTasks={totalTasks}
+              viewingStudentId={viewingStudentId}
+              setViewingStudentId={setViewingStudentId}
+              studentCompletedStories={studentCompletedStories}
+              studentHomeworkList={studentHomeworkList}
             />
           </div>
 

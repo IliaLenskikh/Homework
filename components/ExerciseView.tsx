@@ -10,9 +10,12 @@ interface ExerciseViewProps {
   onBack: () => void;
   onComplete: (score: number, maxScore: number, details: AttemptDetail[]) => void;
   userProfile?: UserProfile;
+  readOnly?: boolean;
+  initialInputs?: Record<string, string>;
+  isLiveMonitoring?: boolean;
 }
 
-const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComplete, userProfile }) => {
+const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComplete, userProfile, readOnly, initialInputs, isLiveMonitoring }) => {
   // --- Safety Guard: Ensure story exists ---
   if (!story) {
     return (
@@ -29,9 +32,15 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
     );
   }
 
-  const [inputs, setInputs] = useState<UserProgress>({});
+  const [inputs, setInputs] = useState<UserProgress>(initialInputs || {});
   const [validation, setValidation] = useState<ValidationState>({});
   const [showResults, setShowResults] = useState(false);
+  
+  useEffect(() => {
+      if (initialInputs) {
+          setInputs(initialInputs);
+      }
+  }, [initialInputs]);
   const [score, setScore] = useState(0);
   const [loadingExplanation, setLoadingExplanation] = useState<string | null>(null);
   const [explanations, setExplanations] = useState<{[key: string]: string}>({});
@@ -598,30 +607,32 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
               </div>
 
               <div className="flex flex-col gap-4">
-                  <div className="flex flex-col sm:flex-row gap-4">
-                      {canRerecord ? (
+                  {!readOnly && (
+                      <div className="flex flex-col sm:flex-row gap-4">
+                          {canRerecord ? (
+                              <button 
+                                  onClick={() => {
+                                      setSpeakingPhase('IDLE');
+                                      setTimer(0);
+                                  }}
+                                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 px-6 py-4 rounded-2xl font-bold transition-all active:scale-95"
+                              >
+                                  Rerecord
+                              </button>
+                          ) : (
+                              <div className="flex-1 bg-slate-50 text-slate-400 px-6 py-4 rounded-2xl font-bold text-center border border-dashed border-slate-200 cursor-not-allowed">
+                                  No more attempts
+                              </div>
+                          )}
                           <button 
-                              onClick={() => {
-                                  setSpeakingPhase('IDLE');
-                                  setTimer(0);
-                              }}
-                              className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 px-6 py-4 rounded-2xl font-bold transition-all active:scale-95"
+                              onClick={handleAudioUpload}
+                              className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-4 rounded-2xl font-bold shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2"
                           >
-                              Rerecord
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                              Submit
                           </button>
-                      ) : (
-                          <div className="flex-1 bg-slate-50 text-slate-400 px-6 py-4 rounded-2xl font-bold text-center border border-dashed border-slate-200 cursor-not-allowed">
-                              No more attempts
-                          </div>
-                      )}
-                      <button 
-                          onClick={handleAudioUpload}
-                          className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white px-6 py-4 rounded-2xl font-bold shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2"
-                      >
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                          Submit
-                      </button>
-                  </div>
+                      </div>
+                  )}
                   <div className="bg-amber-50 border border-amber-100 p-3 rounded-xl">
                       <p className="text-xs text-amber-700 text-center leading-relaxed">
                           <span className="font-bold">Note:</span> {canRerecord ? "You can rerecord only once." : "You have used your single rerecord attempt."}
@@ -849,18 +860,20 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                           </div>
                        </div>
                        
-                       <button 
-                        onClick={handleSubmitWriting} 
-                        disabled={isSubmittingWriting}
-                        className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95 disabled:opacity-70 flex items-center justify-center gap-2"
-                       >
-                           {isSubmittingWriting ? (
-                               <>
-                               <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                               Sending...
-                               </>
-                           ) : "Submit to Teacher"}
-                       </button>
+                       {!readOnly && (
+                           <button 
+                            onClick={handleSubmitWriting} 
+                            disabled={isSubmittingWriting}
+                            className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95 disabled:opacity-70 flex items-center justify-center gap-2"
+                           >
+                               {isSubmittingWriting ? (
+                                   <>
+                                   <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                   Sending...
+                                   </>
+                               ) : "Submit to Teacher"}
+                           </button>
+                       )}
                    </div>
                 </div>
              </div>
@@ -884,11 +897,12 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                          <span>To: {userProfile?.teacherEmail || 'Teacher'}</span>
                       </div>
                       <textarea
-                         className="w-full flex-1 p-4 text-slate-800 text-lg leading-relaxed outline-none resize-none border-2 border-transparent focus:border-indigo-100 rounded-xl transition-all bg-slate-50 focus:bg-white"
+                         className={`w-full flex-1 p-4 text-slate-800 text-lg leading-relaxed outline-none resize-none border-2 border-transparent focus:border-indigo-100 rounded-xl transition-all bg-slate-50 focus:bg-white ${readOnly ? 'opacity-70 cursor-not-allowed' : ''}`}
                          placeholder="Write your reply here..."
                          value={emailContent}
                          onChange={(e) => handleEmailChange(e.target.value)}
                          spellCheck={false}
+                         disabled={readOnly}
                       />
                    </div>
                 </div>
@@ -946,20 +960,20 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                       </div>
 
                       <div className="flex gap-4">
-                          {speakingPhase === 'IDLE' && (
+                          {speakingPhase === 'IDLE' && !readOnly && (
                               <button onClick={startReadAloudPreparation} className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95">Start Preparation</button>
                           )}
-                          {speakingPhase === 'PREPARING' && (
+                          {speakingPhase === 'PREPARING' && !readOnly && (
                               <button onClick={startReadAloudCountdown} className="bg-slate-200 hover:bg-slate-300 text-slate-600 px-6 py-4 rounded-2xl font-bold transition-all">Skip Prep</button>
                           )}
-                          {speakingPhase === 'COUNTDOWN' && (
+                          {speakingPhase === 'COUNTDOWN' && !readOnly && (
                               <div className="text-indigo-600 font-bold px-8 py-4">Starting in {timer}...</div>
                           )}
                           {/* After prep (IDLE again) show Start Recording */}
-                          {speakingPhase === 'IDLE' && timer === 0 && (
+                          {speakingPhase === 'IDLE' && timer === 0 && !readOnly && (
                               <button onClick={startReadAloudRecording} className="bg-emerald-500 hover:bg-emerald-600 text-white px-8 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95">Start Recording</button>
                           )}
-                          {speakingPhase === 'RECORDING' && (
+                          {speakingPhase === 'RECORDING' && !readOnly && (
                               <button onClick={() => finishSpeaking()} className="bg-rose-500 hover:bg-rose-600 text-white px-8 py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95">Stop Recording</button>
                           )}
                       </div>
@@ -996,7 +1010,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                           <div className="animate-pulse py-10 text-slate-500 font-bold">Saving Audio...</div>
                       ) : (
                           <div className="flex flex-col items-center justify-center gap-6 w-full">
-                              {!isMicActive ? (
+                              {!isMicActive && !readOnly ? (
                                 <button 
                                     onClick={startInterviewRecording} 
                                     className="w-32 h-32 rounded-full flex flex-col items-center justify-center border-[6px] border-slate-100 text-rose-500 transition-all duration-300 shadow-xl hover:scale-105 active:scale-95 bg-white hover:border-rose-100"
@@ -1004,7 +1018,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                     <div className="w-8 h-8 bg-rose-500 rounded-full shadow-sm mb-1"></div>
                                     <span className="text-slate-400 font-bold text-[10px] uppercase tracking-widest">START</span>
                                 </button>
-                              ) : (
+                              ) : isMicActive && !readOnly ? (
                                   <div className="flex items-center gap-6 animate-fade-in-up">
                                       {/* Pause/Resume Control */}
                                       {isPaused ? (
@@ -1047,7 +1061,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                           <span className="text-[9px] font-bold uppercase">Finish</span>
                                       </button>
                                   </div>
-                              )}
+                              ) : null}
                           </div>
                       )}
                   </div>
@@ -1086,19 +1100,19 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                       {speakingPhase === 'UPLOADING' && <div className="text-slate-500 font-bold animate-pulse">Uploading...</div>}
                       {speakingPhase === 'COUNTDOWN' && <div className="text-indigo-600 font-bold animate-bounce mb-4">Get ready!</div>}
 
-                      {speakingPhase === 'IDLE' && (
+                      {speakingPhase === 'IDLE' && !readOnly && (
                           <button onClick={startMonologuePreparation} className="bg-indigo-600 text-white px-6 py-4 rounded-2xl font-bold shadow-lg">Start Preparation</button>
                       )}
                       
-                      {speakingPhase === 'PREPARING' && (
+                      {speakingPhase === 'PREPARING' && !readOnly && (
                           <button onClick={startMonologueCountdown} className="bg-slate-200 text-slate-600 px-6 py-4 rounded-2xl font-bold shadow-sm">Skip & Ready</button>
                       )}
                       
-                      {speakingPhase === 'IDLE' && timer === 0 && (
+                      {speakingPhase === 'IDLE' && timer === 0 && !readOnly && (
                            <button onClick={startMonologueRecordingSession} className="bg-emerald-500 text-white px-6 py-4 rounded-2xl font-bold shadow-lg">Start Recording</button>
                       )}
                       
-                      {speakingPhase === 'RECORDING' && (
+                      {speakingPhase === 'RECORDING' && !readOnly && (
                           <button onClick={() => stopRecording()} className="bg-rose-500 text-white px-6 py-4 rounded-2xl font-bold shadow-lg">Finish & Save</button>
                       )}
                   </div>
@@ -1309,12 +1323,12 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                                   type="text"
                                                   value={inputs[key] || ''}
                                                   onChange={(e) => handleInputChange(key, e.target.value)}
-                                                  disabled={isSectionChecked}
+                                                  disabled={isSectionChecked || readOnly}
                                                   className={`w-full px-3 py-2 rounded-lg border-2 outline-none font-bold transition-all ${
                                                       isCorrect === true ? 'border-emerald-400 bg-emerald-50 text-emerald-800' :
                                                       isCorrect === false ? 'border-rose-400 bg-rose-50 text-rose-800' :
                                                       'border-slate-200 focus:border-cyan-500 focus:bg-white'
-                                                  }`}
+                                                  } ${readOnly ? 'opacity-70 cursor-not-allowed' : ''}`}
                                               />
                                               {isSectionChecked && !isCorrect && (
                                                   <div className="text-xs text-emerald-600 mt-1 font-bold">
@@ -1331,7 +1345,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
               )}
 
               <div className="mt-6 flex justify-end">
-                  {!isSectionChecked && (
+                  {!isSectionChecked && !readOnly && (
                       <button 
                           onClick={() => handleCheckSection(index)}
                           className="bg-cyan-600 hover:bg-cyan-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition-all shadow-md active:scale-95"
@@ -1456,8 +1470,8 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                             {task.word}
                         </span>
                         <input type="text" value={userAnswer} onChange={(e) => handleInputChange(taskIndex.toString(), e.target.value)} placeholder={hasValue ? '' : task.word}
-                            className={`h-10 px-3 min-w-[140px] text-center font-semibold rounded-lg border-2 outline-none transition-all duration-200 placeholder:text-slate-400 placeholder:font-bold placeholder:tracking-wide placeholder:uppercase placeholder:opacity-60 ${isCorrect === true ? 'border-emerald-400 bg-emerald-50 text-emerald-800' : isCorrect === false ? 'border-rose-400 bg-rose-50 text-rose-800' : 'border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10'}`}
-                            disabled={showResults} autoComplete="off" spellCheck="false"
+                            className={`h-10 px-3 min-w-[140px] text-center font-semibold rounded-lg border-2 outline-none transition-all duration-200 placeholder:text-slate-400 placeholder:font-bold placeholder:tracking-wide placeholder:uppercase placeholder:opacity-60 ${isCorrect === true ? 'border-emerald-400 bg-emerald-50 text-emerald-800' : isCorrect === false ? 'border-rose-400 bg-rose-50 text-rose-800' : 'border-slate-200 bg-slate-50 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10'} ${readOnly ? 'opacity-70 cursor-not-allowed' : ''}`}
+                            disabled={showResults || readOnly} autoComplete="off" spellCheck="false"
                         />
                         {showResults && !isCorrect && (
                             <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 z-20 hidden group-hover:block w-48">
@@ -1523,7 +1537,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                         btnClass = "bg-indigo-600 text-white shadow-md ring-2 ring-indigo-200 border-indigo-600";
                                     }
                                     return (
-                                        <button key={num} onClick={() => handleReadingSelection(textItem.letter, num)} disabled={showResults} className={`w-10 h-10 rounded-xl text-sm font-bold transition-all flex items-center justify-center ${btnClass}`}>
+                                        <button key={num} onClick={() => handleReadingSelection(textItem.letter, num)} disabled={showResults || readOnly} className={`w-10 h-10 rounded-xl text-sm font-bold transition-all flex items-center justify-center ${btnClass} ${readOnly ? 'opacity-70 cursor-not-allowed' : ''}`}>
                                             {num}
                                         </button>
                                     );
@@ -1570,7 +1584,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                                           btnClass = "bg-indigo-50 border-indigo-500 text-indigo-700 shadow-sm ring-1 ring-indigo-200";
                                       }
                                       return (
-                                          <button key={idx} onClick={() => handleTrueFalseSelection(q.id, idx)} disabled={showResults} className={`py-3 rounded-xl text-sm font-bold transition-all border-2 flex items-center justify-center gap-2 ${btnClass}`}>
+                                          <button key={idx} onClick={() => handleTrueFalseSelection(q.id, idx)} disabled={showResults || readOnly} className={`py-3 rounded-xl text-sm font-bold transition-all border-2 flex items-center justify-center gap-2 ${btnClass} ${readOnly ? 'opacity-70 cursor-not-allowed' : ''}`}>
                                               {opt}
                                           </button>
                                       );
@@ -1606,7 +1620,7 @@ const ExerciseView: React.FC<ExerciseViewProps> = ({ story, type, onBack, onComp
                      </span>
                  </div>
              )}
-             {!showResults && type !== ExerciseType.WRITING && type !== ExerciseType.SPEAKING && type !== ExerciseType.ORAL_SPEECH && type !== ExerciseType.LISTENING && (
+             {!showResults && !readOnly && type !== ExerciseType.WRITING && type !== ExerciseType.SPEAKING && type !== ExerciseType.ORAL_SPEECH && type !== ExerciseType.LISTENING && (
                 <button onClick={checkAnswers} className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-lg active:scale-95">
                     Check All Answers
                 </button>

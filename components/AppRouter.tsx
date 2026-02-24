@@ -101,6 +101,12 @@ interface AppRouterProps {
   progressPercentage: number;
   totalCompleted: number;
   totalTasks: number;
+  
+  // Mirrored View
+  viewingStudentId: string | null;
+  setViewingStudentId: (id: string | null) => void;
+  studentCompletedStories: Set<string>;
+  studentHomeworkList: HomeworkAssignment[];
 }
 
 const ExerciseRouteWrapper: React.FC<AppRouterProps> = (props) => {
@@ -126,6 +132,7 @@ const ExerciseRouteWrapper: React.FC<AppRouterProps> = (props) => {
       }}
       onComplete={(score, maxScore, details) => props.handleStoryComplete(story.title, exerciseType, score, maxScore, details)}
       userProfile={props.userProfile}
+      readOnly={!!props.viewingStudentId}
     />
   );
 };
@@ -179,12 +186,24 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
     joinLiveSession,
     progressPercentage,
     totalCompleted,
-    totalTasks
+    totalTasks,
+    viewingStudentId,
+    setViewingStudentId,
+    studentCompletedStories,
+    studentHomeworkList
   } = props;
+
+  const activeCompletedStories = viewingStudentId ? studentCompletedStories : completedStories;
+  const activeHomework = viewingStudentId ? studentHomeworkList : myHomework;
+  const activeTotalCompleted = viewingStudentId ? studentCompletedStories.size : totalCompleted;
+  const activeProgressPercentage = viewingStudentId ? Math.round((activeTotalCompleted / totalTasks) * 100) || 0 : progressPercentage;
+  const activePendingHomeworkCount = activeHomework.filter(h => h.status === 'pending' || (h.status === 'overdue' && new Date() > new Date(h.due_date))).length;
+  
+  const viewingStudent = viewingStudentId ? trackedStudentsWithStatus.find(s => s.id === viewingStudentId) : null;
 
   const getCategoryStats = (stories: Story[]) => {
       const total = stories.length;
-      const completed = stories.filter(s => completedStories.has(s.title)).length;
+      const completed = stories.filter(s => activeCompletedStories.has(s.title)).length;
       return { completed, total };
   };
 
@@ -430,18 +449,32 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
         !userProfile.role ? <Navigate to="/role-selection" /> :
         (
           <>
-            {userProfile.role === 'student' && (
+            {(userProfile.role === 'student' || viewingStudentId) && (
               <div className="max-w-7xl mx-auto px-4 py-8 w-full">
+                {viewingStudentId && viewingStudent && (
+                    <div className="mb-6 bg-indigo-100 text-indigo-800 p-4 rounded-xl flex justify-between items-center shadow-sm border border-indigo-200">
+                        <div className="flex items-center gap-2 font-bold">
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                            You're viewing as: {viewingStudent.name}
+                        </div>
+                        <button 
+                            onClick={() => setViewingStudentId(null)}
+                            className="bg-white text-indigo-600 px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-indigo-50"
+                        >
+                            Exit Mirrored Mode
+                        </button>
+                    </div>
+                )}
                 <div className="mb-12 text-center">
                   <h1 className="text-4xl md:text-5xl font-extrabold text-slate-900 mb-4 tracking-tight">
-                    Hello, {userProfile.name || 'Student'}!
+                    Hello, {viewingStudentId ? viewingStudent?.name : userProfile.name || 'Student'}!
                   </h1>
                   <p className="text-lg text-slate-500 max-w-2xl mx-auto">
                     Ready to master your English skills? Choose a category below or check your homework.
                   </p>
                 </div>
 
-                {userProfile.role === 'student' && !joinedSessionCode && (
+                {userProfile.role === 'student' && !viewingStudentId && !joinedSessionCode && (
                   <div className="mb-8 bg-gradient-to-r from-purple-500 to-pink-500 text-white p-6 rounded-2xl shadow-xl flex flex-col md:flex-row items-center justify-between gap-6 max-w-3xl mx-auto">
                     <div>
                       <h3 className="text-xl font-bold mb-1 flex items-center gap-2">
@@ -484,13 +517,13 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
                         <div className="relative w-24 h-24 flex items-center justify-center">
                             <svg className="w-full h-full transform -rotate-90">
                                 <circle cx="48" cy="48" r="40" stroke="currentColor" strokeWidth="8" fill="transparent" className="text-slate-100" />
-                                <circle cx="48" cy="48" r="40" stroke="currentColor" strokeWidth="8" fill="transparent" strokeDasharray={251.2} strokeDashoffset={251.2 - (251.2 * progressPercentage) / 100} className="text-indigo-600 transition-all duration-1000 ease-out" />
+                                <circle cx="48" cy="48" r="40" stroke="currentColor" strokeWidth="8" fill="transparent" strokeDasharray={251.2} strokeDashoffset={251.2 - (251.2 * activeProgressPercentage) / 100} className="text-indigo-600 transition-all duration-1000 ease-out" />
                             </svg>
-                            <span className="absolute text-xl font-bold text-slate-800">{progressPercentage}%</span>
+                            <span className="absolute text-xl font-bold text-slate-800">{activeProgressPercentage}%</span>
                         </div>
                         <div>
                             <div className="text-sm text-slate-400 font-bold uppercase tracking-wider mb-1">Total Progress</div>
-                            <div className="text-2xl font-extrabold text-slate-900">{totalCompleted} / {totalTasks} Tasks</div>
+                            <div className="text-2xl font-extrabold text-slate-900">{activeTotalCompleted} / {totalTasks} Tasks</div>
                         </div>
                     </div>
                     
@@ -503,7 +536,7 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
                         </div>
                         <div>
                             <div className="font-bold text-lg">Homework</div>
-                            <div className="text-indigo-100 text-sm">{pendingHomeworkCount} tasks pending</div>
+                            <div className="text-indigo-100 text-sm">{activePendingHomeworkCount} tasks pending</div>
                         </div>
                         <svg className="w-5 h-5 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
                     </div>
@@ -576,7 +609,7 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
                 </div>
               </div>
             )}
-            {userProfile.role === 'teacher' && !selectedStudentForAssignment && (
+            {userProfile.role === 'teacher' && !viewingStudentId && !selectedStudentForAssignment && (
                 <TeacherDashboard 
                     userProfile={userProfile}
                     trackedStudents={trackedStudentsWithStatus}
@@ -592,6 +625,7 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
                     sessionParticipants={sessionParticipants}
                     loading={loading}
                     onAssignHomework={handleAssignHomework}
+                    onViewStudent={(id) => setViewingStudentId(id)}
                 />
             )}
           </>
@@ -600,7 +634,7 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
 
       <Route path="/homework" element={
           <StudentHomeworkView 
-              assignments={myHomework}
+              assignments={activeHomework}
               onStartExercise={(story, type) => startExercise(story, type, 'HOMEWORK')}
               onBack={goHome}
               onRefresh={() => userProfile.id && loadHomework(userProfile.id)}
@@ -608,13 +642,13 @@ export const AppRouter: React.FC<AppRouterProps> = (props) => {
           />
       } />
 
-      <Route path="/exercise/grammar" element={<ExerciseList stories={grammarStories} type={ExerciseType.GRAMMAR} completedStories={completedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
-      <Route path="/exercise/vocabulary" element={<ExerciseList stories={vocabStories} type={ExerciseType.VOCABULARY} completedStories={completedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
-      <Route path="/exercise/reading" element={<ExerciseList stories={allReadingStories} type={ExerciseType.READING} completedStories={completedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
-      <Route path="/exercise/listening" element={<ExerciseList stories={listeningStories} type={ExerciseType.LISTENING} completedStories={completedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
-      <Route path="/exercise/speaking" element={<ExerciseList stories={speakingStories} type={ExerciseType.SPEAKING} completedStories={completedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
-      <Route path="/exercise/oral" element={<ExerciseList stories={allOralStories} type={ExerciseType.ORAL_SPEECH} completedStories={completedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
-      <Route path="/exercise/writing" element={<ExerciseList stories={writingStories} type={ExerciseType.WRITING} completedStories={completedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
+      <Route path="/exercise/grammar" element={<ExerciseList stories={grammarStories} type={ExerciseType.GRAMMAR} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
+      <Route path="/exercise/vocabulary" element={<ExerciseList stories={vocabStories} type={ExerciseType.VOCABULARY} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
+      <Route path="/exercise/reading" element={<ExerciseList stories={allReadingStories} type={ExerciseType.READING} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
+      <Route path="/exercise/listening" element={<ExerciseList stories={listeningStories} type={ExerciseType.LISTENING} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
+      <Route path="/exercise/speaking" element={<ExerciseList stories={speakingStories} type={ExerciseType.SPEAKING} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
+      <Route path="/exercise/oral" element={<ExerciseList stories={allOralStories} type={ExerciseType.ORAL_SPEECH} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
+      <Route path="/exercise/writing" element={<ExerciseList stories={writingStories} type={ExerciseType.WRITING} completedStories={activeCompletedStories} onStartExercise={startExercise} onGoHome={goHome} />} />
 
       <Route path="/exercise/:type/:title" element={<ExerciseRouteWrapper {...props} />} />
 

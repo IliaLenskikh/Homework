@@ -29,6 +29,7 @@ interface TeacherDashboardProps {
     sessionParticipants: string[];
     loading: boolean;
     onAssignHomework: (studentId: string, exercises: any[], date: string, instr: string) => Promise<void>;
+    onViewStudent: (id: string) => void;
 }
 
 const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
@@ -45,7 +46,8 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     liveSessionCode,
     sessionParticipants,
     loading,
-    onAssignHomework
+    onAssignHomework,
+    onViewStudent
 }) => {
     const [activeTab, setActiveTab] = useState<'LIVE_VIEW' | 'STUDENTS' | 'HOMEWORK' | 'ANALYTICS'>('STUDENTS');
     const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
@@ -186,12 +188,20 @@ const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                         <h2 className="text-2xl font-bold text-slate-900">{selectedStudent.name}</h2>
                         <p className="text-slate-500">{selectedStudent.email}</p>
                     </div>
-                    <button 
-                        onClick={() => handleAssignClick(selectedStudent)}
-                        className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-indigo-700"
-                    >
-                        Assign Homework
-                    </button>
+                    <div className="flex gap-2">
+                        <button 
+                            onClick={() => onViewStudent(selectedStudent.id)}
+                            className="bg-white text-indigo-600 border border-indigo-200 px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-indigo-50"
+                        >
+                            View Dashboard
+                        </button>
+                        <button 
+                            onClick={() => handleAssignClick(selectedStudent)}
+                            className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm hover:bg-indigo-700"
+                        >
+                            Assign Homework
+                        </button>
+                    </div>
                 </div>
 
                 <div className="flex-1 overflow-y-auto">
